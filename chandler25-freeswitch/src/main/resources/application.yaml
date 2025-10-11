@@ -1,0 +1,51 @@
+server:
+  port: 18061
+spring:
+  application:
+    name: chandler25-freeswitch
+  #conusl
+  cloud:
+    consul:
+      host: localhost
+      port: 18500
+  #spring.datasource
+  #数据库登陆用户名
+  datasource:
+    username: micro
+    #数据库登陆密码
+    password: 123456
+    #数据库url
+    url: jdbc:mysql://localhost:3306/demo?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
+    #数据库驱动
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    type: com.alibaba.druid.pool.DruidDataSource
+
+#mybatis
+# 指定 mapper.xml 的位置
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  #扫描实体类的位置,在此处指明扫描实体类的包，在 mapper.xml 中就可以不写实体类的全路径名
+  type-aliases-package: com.chandler25.*.domain
+
+freeswitch:
+  esl:
+    servers:
+      - host: 127.0.0.1  # FreeSWITCH IP
+        port: 8021        # ESL 端口（默认8021）
+        password: ClueCon # 默认密码
+        timeout: 10        # 连接超时（秒）
+        reconnect: true  # 自动重连
+        reconnect-interval: 5000  # 重连间隔5秒
+        event-subscribe: ALL  # 订阅所有事件（可选：custom, login, etc.）
+
+link:
+  thingscloud:
+    freeswitch:
+      esl:
+        inbound:
+          servers:
+            - host: 127.0.0.1
+              port: 8021
+              password: ClueCon
+              timeoutSeconds: 10
+          events: CHANNEL_CREATE, CHANNEL_DESTROY

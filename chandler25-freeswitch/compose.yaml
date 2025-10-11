@@ -1,0 +1,10 @@
+version: '1.0'
+services:
+  app:
+    build: .  # 使用当前目录的Dockerfile
+    ports:
+      - "18061:18061"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+    volumes:
+      - ./logs:/app/logs  # 持久化日志

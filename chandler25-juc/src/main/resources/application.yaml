@@ -1,0 +1,28 @@
+server:
+  port: 18062
+spring:
+  application:
+    name: chandler25-juc
+  #conusl
+  cloud:
+    consul:
+      host: localhost
+      port: 18500
+  #spring.datasource
+  #数据库登陆用户名
+  datasource:
+    username: micro
+    #数据库登陆密码
+    password: 123456
+    #数据库url
+    url: jdbc:mysql://localhost:3306/demo?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
+    #数据库驱动
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    type: com.alibaba.druid.pool.DruidDataSource
+
+#mybatis
+# 指定 mapper.xml 的位置
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  #扫描实体类的位置,在此处指明扫描实体类的包，在 mapper.xml 中就可以不写实体类的全路径名
+  type-aliases-package: com.chandler25.*.domain
