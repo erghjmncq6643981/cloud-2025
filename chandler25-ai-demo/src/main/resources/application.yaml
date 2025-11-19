@@ -2,7 +2,7 @@ server:
   port: 15061
 spring:
   application:
-    name: chandler25-demo
+    name: chandler25-ai
   #conusl
   cloud:
     consul:
@@ -12,10 +12,10 @@ spring:
   #数据库登陆用户名
   datasource:
     username: micro
-    #数据库登陆密码
-    password: 123456
+    #数据库登陆密码，服务器 12345678
+    password: 12345678
     #数据库url
-    url: jdbc:mysql://localhost:3306/demo?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
+    url: jdbc:mysql://localhost:3306/assistance?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
     #数据库驱动
     driver-class-name: com.mysql.cj.jdbc.Driver
     type: com.alibaba.druid.pool.DruidDataSource
@@ -32,8 +32,27 @@ spring:
 mybatis:
   mapper-locations: classpath:mapper/*.xml
   #扫描实体类的位置,在此处指明扫描实体类的包，在 mapper.xml 中就可以不写实体类的全路径名
-  type-aliases-package: com.chandler25.*.domain
+  type-aliases-package: com.chandler25.*.entity
 
 
+springdoc:
+  api-docs:
+    path: /api-docs  # API文档的路径
+  swagger-ui:
+    path: /swagger-ui.html  # Swagger UI的路径
+  default-consumes-media-type: application/json  # 默认的消费媒体类型
+  default-produces-media-type: application/json  # 默认的生成媒体类型
+  paths-to-match: /user/**,/auth/**,/ai/**
 
+jwt:
+  secret: IdXaj8cpNe+rcCphLt6uinZKh+6/OpgsQ2JMfowSQDAKb47fzyVtRXN57UVBkzxhcw/Hl+QICTMXx73y5f5ZZg==
+  expiration: 3600000 #过期时间一个小时
+
+auth:
+  excludeUrls:
+    - /ai/*
+    - /user/*
+
+login:
+  key: gXAK9uncMs
 
