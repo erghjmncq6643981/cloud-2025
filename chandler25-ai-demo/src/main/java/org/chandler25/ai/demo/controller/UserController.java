@@ -3,6 +3,7 @@ package org.chandler25.ai.demo.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.chandler25.ai.demo.common.UserLoginCheckHelper;
 import org.chandler25.ai.demo.domain.dto.UserDTO;
 import org.chandler25.ai.demo.respository.entity.User;
 import org.chandler25.ai.demo.service.UserService;
@@ -50,6 +51,12 @@ public class UserController {
     @DeleteMapping("/del/{id}")
     public void del(Long id){
         userService.del(id);
+    }
+
+    @Operation(summary = "查询当前登录用户", description = "查询当前登录用户")
+    @GetMapping("/query/loginInfo")
+    public User queryUserInfo(){
+        return UserLoginCheckHelper.getUserSession();
     }
 
 }

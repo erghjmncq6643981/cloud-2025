@@ -1,45 +1,35 @@
 package org.chandler25.ai.demo.respository.entity;
 
 import java.io.Serializable;
-import java.time.LocalDateTime;
 import java.util.Date;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.mybatisflex.annotation.Column;
-import com.mybatisflex.annotation.Id;
-import com.mybatisflex.annotation.KeyType;
 import com.mybatisflex.annotation.Table;
 import lombok.Data;
-import org.chandler25.ai.demo.common.AiFieldType;
 import org.springframework.format.annotation.DateTimeFormat;
 
 /**
- * 上下文表
- * ai_context
+ * 标签笔记关联表
+ * label_note_relate
  */
 @Data
-@Table("ai_context")
-public class AiContext implements Serializable {
+@Table("label_note_relate")
+public class LabelNoteRelate implements Serializable {
     /**
      * 主键KEY
      */
-    @Id(keyType = KeyType.Auto)
     private Long id;
 
     /**
-     * 用户ID
+     * 标签ID
      */
-    private Long userId;
+    private Long labelId;
 
     /**
-     * 领域类型，COMMON、PROGRAMME、ENGLISH
+     * 笔记ID
      */
-    private AiFieldType fieldType;
-
-    /**
-     * 上下文
-     */
-    private String context;
+    private Long noteId;
 
     /**
      * 创建时间
@@ -47,7 +37,7 @@ public class AiContext implements Serializable {
     @Column(onInsertValue = "now()")
     @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     @JsonFormat(timezone = "GMT+8", pattern = "yyyy-MM-dd HH:mm:ss")
-    private LocalDateTime createTime;
+    private Date createTime;
 
     /**
      * 创建人
@@ -61,7 +51,7 @@ public class AiContext implements Serializable {
     @Column(onInsertValue = "now()",onUpdateValue = "now()")
     @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     @JsonFormat(timezone = "GMT+8", pattern = "yyyy-MM-dd HH:mm:ss")
-    private LocalDateTime lastUpdateTime;
+    private Date lastUpdateTime;
 
     /**
      * 修改人
@@ -73,7 +63,7 @@ public class AiContext implements Serializable {
      * 逻辑删除
      */
     @Column(isLogicDelete = true)
-    private Boolean logicDelete;
+    private Byte logicDelete;
 
     private static final long serialVersionUID = 1L;
 }

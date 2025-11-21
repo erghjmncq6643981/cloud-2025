@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.chandler25.ai.demo.respository.mapper.LabelTreeNodeMapper">
+    <resultMap id="BaseResultMap" type="org.chandler25.ai.demo.respository.entity.LabelTreeNode">
+        <id column="id" jdbcType="BIGINT" property="id"/>
+        <result column="user_id" jdbcType="BIGINT" property="userId"/>
+        <result column="label_name" jdbcType="VARCHAR" property="labelName"/>
+        <result column="label_parent" jdbcType="BIGINT" property="labelParent"/>
+
+        <result column="create_time" jdbcType="TIMESTAMP" property="createTime"/>
+        <result column="create_by" jdbcType="VARCHAR" property="createBy"/>
+        <result column="last_update_time" jdbcType="TIMESTAMP" property="lastUpdateTime"/>
+        <result column="last_update_by" jdbcType="VARCHAR" property="lastUpdateBy"/>
+    </resultMap>
+
+    <select id="selectSubLabels" resultMap="BaseResultMap">
+        WITH RECURSIVE sub_labels AS (
+            SELECT id, label_parent, user_id, label_name, 1 as level
+            FROM label_tree_node
+            WHERE label_parent = #{parentId,jdbcType=BIGINT}
+
+            UNION ALL
+
+            SELECT l.id, l.label_parent, l.user_id,l.label_name, sl.level + 1
+            FROM label_tree_node l
+                     INNER JOIN sub_labels sl ON l.label_parent = sl.id
+        )
+        SELECT * FROM sub_labels
+        ORDER BY level, id;
+    </select>
+</mapper>

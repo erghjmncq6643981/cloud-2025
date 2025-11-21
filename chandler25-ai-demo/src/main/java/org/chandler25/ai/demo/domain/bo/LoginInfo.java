@@ -16,14 +16,14 @@ public class LoginInfo {
     /**
      * 登陆名
      */
-    @Schema(description = "登陆名")
+    @Schema(description = "登陆名",example = "chandler")
     @NotBlank(message = "登陆名 不可为空")
     private String loginName;
 
     /**
      * 密码
      */
-    @Schema(description = "密码")
+    @Schema(description = "密码",example = "123456")
     @NotBlank(message = "密码 不可为空")
     private String loginPassword;
 }

@@ -9,7 +9,9 @@ import com.mybatisflex.annotation.Column;
 import com.mybatisflex.annotation.Id;
 import com.mybatisflex.annotation.KeyType;
 import com.mybatisflex.annotation.Table;
+import com.mybatisflex.core.handler.JacksonTypeHandler;
 import lombok.Data;
+import org.chandler25.ai.demo.domain.bo.NoteData;
 import org.springframework.format.annotation.DateTimeFormat;
 
 /**
@@ -33,7 +35,8 @@ public class Note implements Serializable {
     /**
      * 数据
      */
-    private Object data;
+    @Column(value = "data", typeHandler = JacksonTypeHandler.class)
+    private NoteData data;
 
     /**
      * 创建时间
@@ -46,6 +49,7 @@ public class Note implements Serializable {
     /**
      * 创建人
      */
+    @Column(onInsertValue = "''")
     private String createBy;
 
     /**
@@ -59,6 +63,7 @@ public class Note implements Serializable {
     /**
      * 修改人
      */
+    @Column(onInsertValue = "''")
     private String lastUpdateBy;
 
     /**

@@ -1,7 +1,6 @@
 package org.chandler25.ai.demo.service;
 
 import com.mybatisflex.core.query.QueryWrapper;
-import com.mybatisflex.core.update.UpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -9,6 +8,7 @@ import org.chandler25.ai.demo.common.UserLoginCheckHelper;
 import org.chandler25.ai.demo.domain.dto.UserDTO;
 import org.chandler25.ai.demo.respository.entity.User;
 import org.chandler25.ai.demo.respository.mapper.UserMapper;
+import org.chandler25.ai.demo.util.Argon2PasswordUtil;
 import org.chandler25.ai.demo.util.JwtUtil;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,10 +43,10 @@ public class UserService {
                 .select(USER.ALL_COLUMNS)
                 .from(USER)
                 .where(USER.LOGIN_NAME.eq(loginName))
-                .where(USER.LOGIN_PASSWORD.eq(loginPassword));
+                .limit(1);
 
         User user = userMapper.selectOneByQuery(query);
-        if (Objects.isNull(user)) {
+        if (Objects.isNull(user) || !Argon2PasswordUtil.verifyPassword(loginPassword, user.getLoginPassword())) {
             throw new RuntimeException(String.format("%s用户校验失败！", loginName));
         }
         return JwtUtil.generateToken(loginName, loginPassword, secret, expiration);
@@ -115,12 +115,13 @@ public class UserService {
         if (Objects.isNull(loginUser)) {
             loginUserName = loginUser.getLoginName();
         }
-        User user =new User();
-        BeanUtils.copyProperties(u,user);
+        User user = new User();
+        BeanUtils.copyProperties(u, user);
         user.setLastUpdateBy(loginUserName);
+        user.setLoginPassword(Argon2PasswordUtil.hashPassword(user.getLoginPassword()));
         if (Objects.isNull(u.getId())) {
             if (Objects.nonNull(queryByLoginName(u.getLoginName()))) {
-                throw new RuntimeException("登录名已经存在，请变更一下");
+                throw new RuntimeException(String.format("登录名%s已经存在，可以直接登录", u.getLoginName()));
             }
             user.setCreateBy(loginUserName);
             userMapper.insert(user);

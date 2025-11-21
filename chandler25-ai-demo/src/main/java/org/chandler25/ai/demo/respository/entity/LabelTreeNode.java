@@ -26,6 +26,10 @@ public class LabelTreeNode implements Serializable {
     private Long id;
 
     /**
+     * 用户ID
+     */
+    private Long userId;
+    /**
      * 标签名称
      */
     private String labelName;
@@ -46,6 +50,7 @@ public class LabelTreeNode implements Serializable {
     /**
      * 创建人
      */
+    @Column(onInsertValue = "''")
     private String createBy;
 
     /**
@@ -59,13 +64,8 @@ public class LabelTreeNode implements Serializable {
     /**
      * 修改人
      */
+    @Column(onInsertValue = "''")
     private String lastUpdateBy;
-
-    /**
-     * 逻辑删除
-     */
-    @Column(isLogicDelete = true)
-    private Boolean logicDelete;
 
     private static final long serialVersionUID = 1L;
 }

@@ -43,6 +43,12 @@ public class User implements Serializable {
     private String loginPassword;
 
     /**
+     * 手机号码
+     */
+    @Column(onInsertValue = "''")
+    private String phoneNumber;
+
+    /**
      * 用户类型
      */
     private UserType userType;

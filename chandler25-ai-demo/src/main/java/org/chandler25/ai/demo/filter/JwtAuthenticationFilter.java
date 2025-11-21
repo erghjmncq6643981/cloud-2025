@@ -16,6 +16,7 @@ import org.chandler25.ai.demo.util.ExcludeURLRole;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.chandler25.ai.demo.util.JwtUtil;
@@ -74,7 +75,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter implements Ini
 
     private void outErrorMsg(ServletResponse response, String result) throws IOException {
         HttpServletResponse httpServletResponse = (HttpServletResponse) response;
-        httpServletResponse.setStatus(401);
+        httpServletResponse.setStatus(HttpStatus.UNAUTHORIZED.value());
         response.setCharacterEncoding("utf-8");
         response.setContentType("application/json");
         ServletOutputStream out = response.getOutputStream();

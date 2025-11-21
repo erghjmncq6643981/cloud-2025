@@ -66,6 +66,7 @@ public class Login implements Serializable {
     /**
      * 创建人
      */
+    @Column(onInsertValue = "''")
     private String createBy;
 
     /**
@@ -79,6 +80,7 @@ public class Login implements Serializable {
     /**
      * 修改人
      */
+    @Column(onInsertValue = "''")
     private String lastUpdateBy;
 
     /**
