@@ -12,6 +12,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.core.Ordered;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
@@ -45,10 +46,11 @@ public class TemporaryTokenFilter implements GlobalFilter, Ordered, SmartInitial
         int port = uri.getPort();
         String path = uri.getPath();
         log.info("获取请求中的目的地信息，host:{} port:{}; path:{}", host, port, path);
-       String remoteHostIp= request.getRemoteAddress().getAddress().getHostAddress();
+        //前端发起的请求，header中会有很多请求源信息；如果页面是后端返回给前端，后端发起的请求origin就会为null
+        String origin = request.getHeaders().getFirst(HttpHeaders.ORIGIN);
         String remoteHostString=request.getRemoteAddress().getHostString();
         int remotePort=request.getRemoteAddress().getPort();
-        log.info("获取请求中的来源信息，hostIp:{} hostString:{}; port:{}", remoteHostIp, remoteHostString, remotePort);
+        log.info("获取请求中的来源信息，remoteHostString:{} origin:{}; port:{}", remoteHostString, origin, remotePort);
         //检查是否有token
         String authorization = "V4-Authorization";
         List<String> authorizationValues = request.getHeaders().get(authorization);

@@ -15,6 +15,8 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.chandler.key.example.domain.dataobject.User;
 import org.apache.ibatis.annotations.Mapper;
 
+import java.util.List;
+
 /**
  * 类功能描述
  *
@@ -23,4 +25,9 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface UserMapper extends BaseMapper<User> {
+
+    User selectByIdXml(Long id);
+
+    int insertXml(User user);
+    int insertSelectiveXml(List<User> users);
 }

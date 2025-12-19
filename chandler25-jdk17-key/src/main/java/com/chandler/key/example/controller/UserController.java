@@ -7,6 +7,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 /**
  * restful风格的接口
  *
@@ -22,8 +24,14 @@ public class UserController {
     private UserService userService;
 
     @Operation(description = "查询")
+    @GetMapping("/list")
+    public List<User> list() {
+        return userService.findAll();
+    }
+
+    @Operation(description = "查询")
     @GetMapping("/{id}")
-    public  User getUser(@RequestParam("id") Long id) {
+    public  User detail(@RequestParam("id") Long id) {
         return userService.detail(id);
     }
 
@@ -43,5 +51,17 @@ public class UserController {
     @PutMapping("modify")
     public  void update(User user) {
         userService.update(user);
+    }
+
+    @Operation(description = "查询")
+    @GetMapping("/xml/{id}")
+    public User detailXml(Long id) {
+        return userService.detailXml(id);
+    }
+
+    @Operation(description = "新增")
+    @PostMapping("/xml/create")
+    public void insetXml(User user) {
+        userService.createXml(user);
     }
 }

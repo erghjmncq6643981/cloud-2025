@@ -16,6 +16,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.chandler.key.example.encrypt.annotation.EncryptEntity;
 import com.chandler.key.example.encrypt.annotation.EncryptField;
+import com.chandler.key.example.encrypt.enu.KeyType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -38,7 +39,7 @@ public class User {
     @Schema(description = "年龄")
     Integer age;
     @Schema(description = "邮箱")
-//    @TableField(typeHandler = TestTypeHandler.class)
-    @EncryptField(prefixLength = 1, suffixLength = 2)
+//    @TableField(typeHandler = EncryptTypeHandler.class)
+    @EncryptField(type = KeyType.DEF, prefixLength = 1, suffixLength = 2)
     String email;
 }

@@ -5,9 +5,6 @@ import com.chandler.key.example.encrypt.exception.DataEncryptException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-
 /**
  *
  * @author 钱丁君-chandler 2025/12/15
@@ -24,8 +21,7 @@ public class AESEncryptor implements Encryptor {
         validateKey(key);
 
         try {
-            String ciphertext = AESUtils.encrypt(plaintext, key, aesMode);
-            return Base64.getEncoder().encodeToString(ciphertext.getBytes(StandardCharsets.UTF_8));
+            return AESUtils.encrypt(plaintext, key, aesMode);
         } catch (Exception e) {
             log.error("数据加密失败", e);
             throw new DataEncryptException("加密操作异常", e);
@@ -33,12 +29,11 @@ public class AESEncryptor implements Encryptor {
     }
 
     @Override
-    public String decrypt(String cipherBase64, String key) {
-        if (StringUtils.isEmpty(cipherBase64)) {
-            return cipherBase64;
+    public String decrypt(String ciphertext, String key) {
+        if (StringUtils.isEmpty(ciphertext)) {
+            return ciphertext;
         }
         try {
-            String ciphertext = new String(Base64.getDecoder().decode(cipherBase64), StandardCharsets.UTF_8);
             return AESUtils.decrypt(ciphertext, key, aesMode);
         } catch (Exception e) {
             log.error("数据解密失败", e);

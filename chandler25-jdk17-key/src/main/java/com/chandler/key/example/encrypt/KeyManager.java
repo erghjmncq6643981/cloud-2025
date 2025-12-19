@@ -7,6 +7,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
+import java.lang.annotation.Annotation;
 import java.util.*;
 
 /**
@@ -128,6 +129,51 @@ public class KeyManager {
         return value.startsWith(PREFIX);
     }
 
+    /**
+     * 数据脱敏
+     *
+     * @param value        原始数据
+     * @param prefixLength 保留的前缀
+     * @param suffixLength 保留的后缀
+     * @return 脱敏之后的数据
+     */
+    public String mask(String value, int prefixLength, int suffixLength) {
+        if (StringUtils.isBlank(value)) {
+            return value;
+        }
+        EncryptField encryptField = new EncryptField() {
+
+            @Override
+            public Class<? extends Annotation> annotationType() {
+                return EncryptField.class;
+            }
+
+            @Override
+            public KeyType type() {
+                return KeyType.DEF;
+            }
+
+            @Override
+            public int prefixLength() {
+                return prefixLength;
+            }
+
+            @Override
+            public int suffixLength() {
+                return suffixLength;
+            }
+        };
+
+        return mask(value, encryptField);
+    }
+
+    /**
+     * 数据脱敏
+     *
+     * @param value        原始数据
+     * @param encryptField 脱敏策略
+     * @return 脱敏之后的数据
+     */
     public String mask(String value, EncryptField encryptField) {
         if (StringUtils.isBlank(value)) {
             return value;
@@ -138,7 +184,7 @@ public class KeyManager {
         switch (encryptField.type()) {
             case DEF:
             case ID_CARD:
-            case PHONE:
+            case PHONE_NUMBER:
             case BANK_CARD:
                 prefixLen = (encryptField.prefixLength() > 0) ? encryptField.prefixLength() : 3;
                 suffixLen = (encryptField.suffixLength() > 0) ? encryptField.suffixLength() : 4;
