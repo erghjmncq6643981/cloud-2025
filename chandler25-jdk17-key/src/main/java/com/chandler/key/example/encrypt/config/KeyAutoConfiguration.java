@@ -20,22 +20,17 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @EnableConfigurationProperties(KeyProperties.class)
-public class KeyAutoConfiguration implements ApplicationContextAware {
-    private ApplicationContext applicationContext;
+public class KeyAutoConfiguration {
 
     @Bean
-    public KeyManager keyManager(SqlSessionFactory sqlSessionFactory){
-        KeyManager keyManager= new KeyManager();
-        ColumnsDecryptInterceptor decryptInterceptor=new ColumnsDecryptInterceptor(keyManager);
+    public KeyManager keyManager(KeyProperties keyProperties, SqlSessionFactory sqlSessionFactory) {
+        KeyManager keyManager = new KeyManager();
+        keyManager.setKeyProperties(keyProperties);
+        ColumnsDecryptInterceptor decryptInterceptor = new ColumnsDecryptInterceptor(keyManager);
         sqlSessionFactory.getConfiguration().addInterceptor(decryptInterceptor);
-        ColumnsEncryptInterceptor encryptInterceptor= new ColumnsEncryptInterceptor(keyManager);
+        ColumnsEncryptInterceptor encryptInterceptor = new ColumnsEncryptInterceptor(keyManager);
         sqlSessionFactory.getConfiguration().addInterceptor(encryptInterceptor);
         return keyManager;
-    }
-
-    @Override
-    public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
-        this.applicationContext = applicationContext;
     }
 
 }

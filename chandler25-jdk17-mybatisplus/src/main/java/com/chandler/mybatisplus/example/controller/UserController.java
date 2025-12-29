@@ -40,8 +40,8 @@ public class UserController {
     }
 
     @Operation(description = "修改")
-    @PutMapping("modify")
-    public  void update(User user) {
+    @PostMapping("modify")
+    public  void update(@RequestBody User user) {
         userService.update(user);
     }
 }

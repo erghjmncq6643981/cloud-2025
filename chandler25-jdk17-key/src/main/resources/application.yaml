@@ -43,3 +43,7 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
     enabled: true
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

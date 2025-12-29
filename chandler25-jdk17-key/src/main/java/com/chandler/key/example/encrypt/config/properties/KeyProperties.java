@@ -13,12 +13,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = KeyProperties.PREFIX)
 public class KeyProperties {
     public static final String PREFIX = "encryption.key";
-    private String algorithm;
-
-    private String idCardKey;
-
-    private String phoneKey;
-
-    private String bankCardKey;
+    private String algorithm = "DEF";
+    private String key = "5Gpl5F5+PiAnpDZdKxqQ+Q==";
+    // 旧密钥(用于密钥轮换过渡期)
+    private String oldKey = "3t2QBbtBQ8kOGwa+H69S8A==";
 
 }

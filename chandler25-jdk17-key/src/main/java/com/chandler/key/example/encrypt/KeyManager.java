@@ -1,9 +1,11 @@
 package com.chandler.key.example.encrypt;
 
 import com.chandler.key.example.encrypt.annotation.EncryptField;
+import com.chandler.key.example.encrypt.config.properties.KeyProperties;
 import com.chandler.key.example.encrypt.encryptor.Encryptor;
 import com.chandler.key.example.encrypt.enu.KeyType;
 import jakarta.annotation.PostConstruct;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
@@ -20,6 +22,8 @@ public class KeyManager {
     private final Map<String, String> currentKeys = new HashMap<>();
     private final Map<String, String> oldKeys = new HashMap<>();
 
+    @Setter
+    private KeyProperties keyProperties;
     private String algorithm = "DEF";
     private String key = "5Gpl5F5+PiAnpDZdKxqQ+Q==";
     // 旧密钥(用于密钥轮换过渡期)
@@ -28,6 +32,9 @@ public class KeyManager {
 
     @PostConstruct
     public void init() {
+        this.algorithm = keyProperties.getAlgorithm();
+        this.key = keyProperties.getKey();
+        this.oldKey = keyProperties.getOldKey();
         // 校验密钥是否配置
         if (StringUtils.isEmpty(key)) {
             throw new IllegalArgumentException("加密密钥未配置");
