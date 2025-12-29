@@ -23,11 +23,11 @@ import java.net.URI;
 import java.util.List;
 
 /**
- *
+ * 全局过滤器
  * @author 钱丁君-chandler 2025/12/10
  */
 @Slf4j
-@Component
+//@Component
 public class TemporaryTokenFilter implements GlobalFilter, Ordered, SmartInitializingSingleton {
     private List<String> serverNames = Lists.newArrayList();
 

@@ -24,6 +24,14 @@ spring:
             - Path=/satoken/**       # 路径匹配
           filters:
             - StripPrefix=1
+            - PreserveHostHeader
+            - name: TemporaryToken
+              args:
+               # 需要放行的API列表，为空则放行所有匹配路由的请求
+               apis:
+                - method: GET
+                  paths:
+                    - /test/**
   data:
     redis:
       host: localhost
@@ -65,3 +73,14 @@ sa-token:
   token-style: uuid
   # 是否输出操作日志
   is-log: true
+
+
+token:
+  filter:
+    domainNames:
+      - localhost
+      - 0:0:0:0:0:0:0:1
+
+logging:
+  level:
+    com.chandler.gateway.example.filter.TemporaryTokenGatewayFilterFactory: DEBUG
