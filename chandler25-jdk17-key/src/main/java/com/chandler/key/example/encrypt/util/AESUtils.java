@@ -144,21 +144,22 @@ public class AESUtils {
      */
     public static void main(String[] args) throws Exception {
         String plaintext = "18878920013";
-//        SecretKey key = generateKey(128);
-//        String keyBase64 = Base64.getEncoder().encodeToString(key.getEncoded());
-//
-//        System.out.println("原始文本: " + plaintext);
-//        System.out.println("密钥: " + keyBase64);
-//        System.out.println("密钥Base64: " + keyBase64);
-//        System.out.println();
+        SecretKey key = generateKey(128);
+        String keyBase64 = Base64.getEncoder().encodeToString(key.getEncoded());
 
-        String encrypted = "J0Idse4iTbsnrNUUSgUBEWatD+rJk/rafh2eTjB72V25JxsL";
-        String key = "5Gpl5F5+PiAnpDZdKxqQ+Q==";
-        String ciphertext = decrypt(encrypted, key, AESMode.GCM);
-        String cipherBase64 = Base64.getEncoder().encodeToString(ciphertext.getBytes(StandardCharsets.UTF_8));
-        System.out.println(cipherBase64);
-        ciphertext = new String(Base64.getDecoder().decode(cipherBase64), StandardCharsets.UTF_8);
-        System.out.println(ciphertext);
+        System.out.println("密钥: " + key.getEncoded());
+        System.out.println("密钥长度: " + key.getEncoded().length);
+        System.out.println("密钥Base64: " + keyBase64);
+        System.out.println("密钥Base64的长度:"+keyBase64.length());
+
+//        String encrypted = "J0Idse4iTbsnrNUUSgUBEWatD+rJk/rafh2eTjB72V25JxsL";
+//        System.out.println(encrypted.length());
+//        String key = "5Gpl5F5+PiAnpDZdKxqQ+Q==";
+//        String ciphertext = decrypt(encrypted, key, AESMode.GCM);
+//        String cipherBase64 = Base64.getEncoder().encodeToString(ciphertext.getBytes(StandardCharsets.UTF_8));
+//        System.out.println(cipherBase64);
+//        ciphertext = new String(Base64.getDecoder().decode(cipherBase64), StandardCharsets.UTF_8);
+//        System.out.println(ciphertext);
 
 
     }
