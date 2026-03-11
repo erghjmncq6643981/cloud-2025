@@ -1,0 +1,65 @@
+server:
+  port: 17680
+spring:
+  application:
+    name: client-demo
+
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+        namespace: public
+        group: DEFAULT_GROUP
+        username: nacos
+        password: 123456
+        access-key: 123456
+        secret-key: 123456
+
+  datasource:
+    username: micro
+    password: 123456
+    url: jdbc:mysql://localhost:3306/demo?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    type: com.alibaba.druid.pool.DruidDataSource
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-packag: com.chandler.*.domain
+
+info:
+  app:
+    name: ${spring.application.name}
+    description: @project.description@
+    version: project.build.sourceEncoding@
+    java:
+      version: @java.version@
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+
+# 签名验证配置
+signature:
+  enabled: true  # 启用HMAC签名
+  algorithm: SHA256
+  timestamp-window: 60
+  nonce-expire-time: 60
+  salt: your-secret-salt-key-change-in-production
+
+# RSA签名配置
+rsa:
+  enabled: false  # 暂时禁用RSA签名
+  signature-algorithm: SHA256withRSA
+  use-private-key-encryption: true
+  # 公钥（用于后端验证签名和解密）
+  public-key: MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1234567890abcdef...
+  # 私钥（用于前端生成签名和加密，实际部署时应该在前端配置）
+  private-key: MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDXYZ...
