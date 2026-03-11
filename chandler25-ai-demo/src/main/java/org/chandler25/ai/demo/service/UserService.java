@@ -90,7 +90,6 @@ public class UserService {
         QueryWrapper query = QueryWrapper.create()
                 .select(USER.ALL_COLUMNS)
                 .from(USER);
-
         if (Objects.nonNull(u.getId())) {
             query.where(USER.ID.eq(u.getId()));
         }

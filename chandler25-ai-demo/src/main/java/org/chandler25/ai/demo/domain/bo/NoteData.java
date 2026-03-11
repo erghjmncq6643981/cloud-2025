@@ -11,6 +11,7 @@ import lombok.Data;
  * @since 21
  */
 @Data
+@Schema(description = "笔记数据")
 public class NoteData {
     @Schema(description = "笔记内容")
     private String content;

@@ -12,6 +12,7 @@ import org.chandler25.ai.demo.common.AiQuestionStatus;
  * @since 21
  */
 @Data
+@Schema(description = "聊天历史对象")
 public class ChatHistoryDTO {
     /**
      * 问题ID

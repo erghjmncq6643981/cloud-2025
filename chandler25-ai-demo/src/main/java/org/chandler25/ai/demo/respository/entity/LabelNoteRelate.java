@@ -5,6 +5,8 @@ import java.util.Date;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.mybatisflex.annotation.Column;
+import com.mybatisflex.annotation.Id;
+import com.mybatisflex.annotation.KeyType;
 import com.mybatisflex.annotation.Table;
 import lombok.Data;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -19,6 +21,7 @@ public class LabelNoteRelate implements Serializable {
     /**
      * 主键KEY
      */
+    @Id(keyType = KeyType.Auto)
     private Long id;
 
     /**
@@ -58,12 +61,6 @@ public class LabelNoteRelate implements Serializable {
      */
     @Column(onInsertValue = "''")
     private String lastUpdateBy;
-
-    /**
-     * 逻辑删除
-     */
-    @Column(isLogicDelete = true)
-    private Byte logicDelete;
 
     private static final long serialVersionUID = 1L;
 }

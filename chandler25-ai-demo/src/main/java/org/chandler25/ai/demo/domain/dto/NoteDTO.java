@@ -3,6 +3,7 @@ package org.chandler25.ai.demo.domain.dto;
 import com.mybatisflex.annotation.Id;
 import com.mybatisflex.annotation.KeyType;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 import java.util.List;
@@ -15,16 +16,18 @@ import java.util.List;
  * @since 21
  */
 @Data
+@Schema(title = "笔记对象", description = "笔记对象")
 public class NoteDTO {
     /**
      * 主键KEY
      */
-    @Schema(description = "笔记ID")
+    @Schema(description = "笔记ID，ID为空表示新增，ID存在表示修改")
     private Long id;
 
     /**
      * 笔记内容
      */
     @Schema(description = "笔记内容")
+    @NotBlank(message = "笔记内容 不可为空")
     String content;
 }

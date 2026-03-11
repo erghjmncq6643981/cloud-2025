@@ -42,7 +42,7 @@ springdoc:
     path: /swagger-ui.html  # Swagger UI的路径
   default-consumes-media-type: application/json  # 默认的消费媒体类型
   default-produces-media-type: application/json  # 默认的生成媒体类型
-  paths-to-match: /user/**,/auth/**,/ai/**
+  paths-to-match: /user/**,/auth/**,/ai/**,/note/**
 
 jwt:
   secret: IdXaj8cpNe+rcCphLt6uinZKh+6/OpgsQ2JMfowSQDAKb47fzyVtRXN57UVBkzxhcw/Hl+QICTMXx73y5f5ZZg==
@@ -52,6 +52,7 @@ auth:
   excludeUrls:
     - /ai/*
     - /user/*
+    - /note/*
 
 login:
   key: gXAK9uncMs

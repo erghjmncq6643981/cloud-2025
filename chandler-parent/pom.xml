@@ -26,7 +26,7 @@
         <spring-cloud.version>2025.0.0</spring-cloud.version>
         <spring-cloud.alibaba.version>2021.0.4.0</spring-cloud.alibaba.version>
         <boot-mybatis.version>2.2.2</boot-mybatis.version>
-        <mybatis-flex.version>1.11.1</mybatis-flex.version>
+        <mybatis-flex.version>1.11.0</mybatis-flex.version>
         <boot-druid.version>1.2.25</boot-druid.version>
         <boot-mapper.version>5.0.1</boot-mapper.version>
         <mysql.version>8.0.29</mysql.version>
@@ -64,7 +64,7 @@
 
             <dependency>
                 <groupId>com.mybatis-flex</groupId>
-                <artifactId>mybatis-flex-spring-boot-starter</artifactId>
+                <artifactId>mybatis-flex-spring-boot3-starter</artifactId>
                 <version>${mybatis-flex.version}</version>
             </dependency>
 

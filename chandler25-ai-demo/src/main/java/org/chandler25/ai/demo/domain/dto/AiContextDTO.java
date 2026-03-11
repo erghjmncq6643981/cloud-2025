@@ -13,7 +13,7 @@ import org.chandler25.ai.demo.common.AiFieldType;
  * @since 21
  */
 @Data
-@Schema(title = "AI上下文DTO", description = "AI上下文DTO")
+@Schema(title = "AI上下文", description = "AI上下文")
 public class AiContextDTO {
     /**
      * 用户ID

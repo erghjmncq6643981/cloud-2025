@@ -1,10 +1,12 @@
 package org.chandler25.ai.demo.service;
 
+import com.google.common.collect.Lists;
 import com.mybatisflex.core.query.QueryCondition;
 import com.mybatisflex.core.query.QueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.chandler25.ai.demo.common.UserLoginCheckHelper;
+import org.chandler25.ai.demo.domain.bo.LabelNode;
 import org.chandler25.ai.demo.domain.bo.NoteData;
 import org.chandler25.ai.demo.domain.dto.LabelDTO;
 import org.chandler25.ai.demo.domain.dto.NoteDTO;
@@ -18,10 +20,15 @@ import org.chandler25.ai.demo.respository.mapper.NoteMapper;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
+import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
+import static org.chandler25.ai.demo.respository.entity.table.LabelNoteRelateTableDef.LABEL_NOTE_RELATE;
 import static org.chandler25.ai.demo.respository.entity.table.LabelTreeNodeTableDef.LABEL_TREE_NODE;
+import static org.chandler25.ai.demo.respository.entity.table.NoteTableDef.NOTE;
 import static org.chandler25.ai.demo.respository.entity.table.UserTableDef.USER;
 
 /**
@@ -61,7 +68,7 @@ public class NoteService {
         nodeMapper.deleteById(labelId);
     }
 
-    public void queryAllLabels() {
+    public List<LabelNode> queryAllLabels() {
         User loginUser = UserLoginCheckHelper.getUserSession();
         if (Objects.isNull(loginUser)) {
             throw new RuntimeException("请登录");
@@ -69,7 +76,52 @@ public class NoteService {
         QueryWrapper query = QueryWrapper.create()
                 .select(LABEL_TREE_NODE.ALL_COLUMNS)
                 .from(LABEL_TREE_NODE)
-                .where(LABEL_TREE_NODE.CREATE_BY.eq(loginUser.getLoginName()));
+                .where(LABEL_TREE_NODE.CREATE_BY.eq(loginUser.getLoginName()))
+                .and(LABEL_TREE_NODE.LABEL_PARENT.eq(0))
+                .orderBy(LABEL_TREE_NODE.ID, true);
+        List<LabelTreeNode> rootLabels = nodeMapper.selectListByQuery(query);
+        List<LabelNode> labels = rootLabels.stream().map(rootL -> {
+            List<LabelTreeNode> children = nodeMapper.selectSubLabels(rootL.getId());
+            return toTree(rootL, children);
+        }).toList();
+        return labels;
+    }
+
+    private LabelNode toTree(LabelTreeNode node, List<LabelTreeNode> children) {
+        LabelNode parent = new LabelNode();
+        BeanUtils.copyProperties(node, parent);
+        List<LabelTreeNode> subNodes = children.stream()
+                .filter(c -> c.getLabelParent().equals(parent.getId()))
+                .toList();
+        if (CollectionUtils.isEmpty(subNodes)) {
+            return parent;
+        }
+        subNodes.forEach(sNode -> toTree(sNode, children));
+        List<LabelNode> subLabels = subNodes.stream().map(c -> {
+                    LabelNode sub = new LabelNode();
+                    BeanUtils.copyProperties(c, sub);
+                    return sub;
+                })
+                .toList();
+        parent.setNodes(subLabels);
+        return parent;
+    }
+
+    public LabelNode querySubLabel(Long labelId){
+        User loginUser = UserLoginCheckHelper.getUserSession();
+        if (Objects.isNull(loginUser)) {
+            throw new RuntimeException("请登录");
+        }
+        QueryWrapper query = QueryWrapper.create()
+                .select(LABEL_TREE_NODE.ALL_COLUMNS)
+                .from(LABEL_TREE_NODE)
+                .where(LABEL_TREE_NODE.CREATE_BY.eq(loginUser.getLoginName()))
+                .and(LABEL_TREE_NODE.LABEL_PARENT.eq(labelId))
+                .orderBy(LABEL_TREE_NODE.ID, true);
+        List<LabelTreeNode> subLabels = nodeMapper.selectListByQuery(query);
+        LabelTreeNode node=new LabelTreeNode();
+        node.setId(labelId);
+        return toTree(node, subLabels);
     }
 
     public void relate(Long labelId,Long noteId){
@@ -81,9 +133,17 @@ public class NoteService {
         relate.setNoteId(noteId);
         relate.setLabelId(labelId);
         relate.setLastUpdateBy(loginUser.getLastUpdateBy());
-//        QueryCondition whereConditions=QueryCondition.create();
-//        whereConditions.
-//        relateMapper.selectOneByCondition()
+        relate.setCreateBy(loginUser.getLastUpdateBy());
+        QueryWrapper query = QueryWrapper.create()
+                .select(LABEL_NOTE_RELATE.ALL_COLUMNS)
+                .from(LABEL_NOTE_RELATE)
+                .where(LABEL_NOTE_RELATE.NOTE_ID.eq(noteId))
+                .and(LABEL_NOTE_RELATE.LABEL_ID.eq(labelId))
+                .limit(1);
+        LabelNoteRelate old= relateMapper.selectOneByQuery(query);
+        if(Objects.isNull(old)){
+            relateMapper.insert(relate);
+        }
     }
 
     /**
@@ -92,8 +152,17 @@ public class NoteService {
      * {@Author} chandler
      * {@create} 2025/11/21 14:03
      */
-    public void queryNotes() {
-
+    public List<Note> queryNotes() {
+        User loginUser = UserLoginCheckHelper.getUserSession();
+        if (Objects.isNull(loginUser)) {
+            throw new RuntimeException("请登录");
+        }
+        QueryWrapper query = QueryWrapper.create()
+                .select(NOTE.ALL_COLUMNS)
+                .from(NOTE)
+                .where(NOTE.CREATE_BY.eq(loginUser.getLoginName()))
+                .orderBy(NOTE.LAST_UPDATE_TIME,false);
+        return noteMapper.selectListByQuery(query);
     }
 
     public Note queryNoteById(Long noteId) {
@@ -114,7 +183,7 @@ public class NoteService {
         noteMapper.insert(n);
     }
 
-    public void update(NoteDTO note) {
+    public void updateNote(NoteDTO note) {
         User loginUser = UserLoginCheckHelper.getUserSession();
         if (Objects.isNull(loginUser)) {
             throw new RuntimeException("请登录");
@@ -130,5 +199,7 @@ public class NoteService {
         noteMapper.update(n);
     }
 
-
+    public void delNote(Long noteId){
+        noteMapper.deleteById(noteId);
+    }
 }

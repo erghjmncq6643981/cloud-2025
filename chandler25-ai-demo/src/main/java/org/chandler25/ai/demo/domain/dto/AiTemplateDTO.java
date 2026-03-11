@@ -14,6 +14,7 @@ import org.chandler25.ai.demo.common.TemplateStatus;
  * @since 21
  */
 @Data
+@Schema(description = "AI请求模板")
 public class AiTemplateDTO {
     @Schema(description = "模板ID，新增时为空，修改时必传")
     private Long id;

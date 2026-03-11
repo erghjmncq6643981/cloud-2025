@@ -12,6 +12,7 @@ import lombok.Data;
  * @since 21
  */
 @Data
+@Schema(description = "登录对象")
 public class LoginInfo {
     /**
      * 登陆名

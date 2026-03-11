@@ -13,6 +13,7 @@ import java.io.Serializable;
  * @since 21
  */
 @Data
+@Schema(description = "用户的问题")
 public class UserQuestion  implements Serializable {
     @Schema(description = "问题KEY，异步时，可以使用其获取返回的结果")
     private String questionId;

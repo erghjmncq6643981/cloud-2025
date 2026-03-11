@@ -183,6 +183,9 @@
                 </executions>
                 <configuration>
                     <mainClass>org.chandler25.ai.demo.Application</mainClass> <!-- 可选：显式指定主类 -->
+                    <excludes>
+                        <exclude>classpath:*.yaml</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
         </plugins>
