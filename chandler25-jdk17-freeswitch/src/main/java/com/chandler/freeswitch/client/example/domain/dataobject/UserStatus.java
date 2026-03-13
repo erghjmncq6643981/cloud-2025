@@ -1,10 +1,12 @@
 package com.chandler.freeswitch.client.example.domain.dataobject;
 
+import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 import lombok.Builder;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 /**
@@ -17,67 +19,37 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserStatus {
-    
-    /**
-     * 用户ID/分机号
-     */
+@TableName("user_status")
+public class UserStatus implements Serializable {
+
+    @TableId(type = IdType.AUTO)
+    private Long id;
+
     private String userId;
-    
-    /**
-     * 用户状态
-     */
     private String status;
-    
-    /**
-     * 状态描述
-     */
     private String statusDescription;
-    
-    /**
-     * 当前通话UUID（如果有）
-     */
+    private String networkIp;
+    private String userAgent;
     private String channelUuid;
     
-    /**
-     * 被叫号码（如果有）
-     */
-    private String destinationNumber;
-    
-    /**
-     * 主叫号码（如果有）
-     */
-    private String callerNumber;
-    
-    /**
-     * 状态更新时间
-     */
+    /** 通话状态: IDLE, RINGING, BUSY */
+    private String callStatus;
+
+    // --- 审计与逻辑删除字段 ---
+
+    @TableField(fill = FieldFill.INSERT)
+    private String createBy;
+
+    @TableField(fill = FieldFill.INSERT)
+    private LocalDateTime createTime;
+
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private String updateBy;
+
+    @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
-    
-    /**
-     * 状态枚举
-     */
-    public enum Status {
-        IDLE("空闲"),
-        RINGING("振铃"),
-        ANSWERED("已接听"),
-        HANGUP("已挂断"),
-        BRIDGE("通话中"),
-        HOLD("保持"),
-        PARKED("驻留"),
-        REGISTERED("已注册"),
-        UNREGISTERED("已注销"),
-        EXPIRED("已过期"),
-        UNKNOWN("未知");
-        
-        private final String description;
-        
-        Status(String description) {
-            this.description = description;
-        }
-        
-        public String getDescription() {
-            return description;
-        }
-    }
+
+    @TableLogic
+    @TableField(fill = FieldFill.INSERT)
+    private Integer deleted;
 }

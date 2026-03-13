@@ -91,23 +91,4 @@ public class UserStatusController {
         return ResponseEntity.ok(userStatusService.getUsersByStatus("RINGING"));
     }
     
-    @Operation(description = "清空所有用户状态")
-    @DeleteMapping("/clear")
-    public ResponseEntity<Map<String, String>> clearAllUserStatus() {
-        userStatusService.clearAllUserStatus();
-        
-        Map<String, String> response = new HashMap<>();
-        response.put("message", "All user status data cleared successfully");
-        return ResponseEntity.ok(response);
-    }
-    
-    @Operation(description = "删除指定用户状态")
-    @DeleteMapping("/{userId}")
-    public ResponseEntity<Map<String, String>> removeUserStatus(@PathVariable String userId) {
-        userStatusService.removeUserStatus(userId);
-        
-        Map<String, String> response = new HashMap<>();
-        response.put("message", "User status for " + userId + " removed successfully");
-        return ResponseEntity.ok(response);
-    }
 }

@@ -1,8 +1,8 @@
 server:
-  port: 17680
+  port: 17681
 spring:
   application:
-    name: client-demo
+    name: freeswitch-client-demo
 
   # 禁用Nacos自动配置
   cloud:
@@ -15,7 +15,7 @@ spring:
   datasource:
     username: micro
     password: 123456
-    url: jdbc:mysql://localhost:3306/demo?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
+    url: jdbc:mysql://localhost:3306/fs_client?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&autoReconnectForPools=true
     driver-class-name: com.mysql.cj.jdbc.Driver
     type: com.alibaba.druid.pool.DruidDataSource
 
@@ -40,10 +40,10 @@ springdoc:
     path: /swagger-ui.html
     enabled: true
 
-logging:
-  level:
-    link.thingscloud: DEBUG
-    org.freeswitch.esl: DEBUG
+#logging:
+#  level:
+#    link.thingscloud: DEBUG
+#    org.freeswitch.esl: DEBUG
 
 # FreeSWITCH ESL Configuration (必须严格使用 link.thingscloud 前缀)
 link:
@@ -51,6 +51,14 @@ link:
     freeswitch:
       esl:
         inbound:
+          # 开启性能模式，启用高性能 Executor
+          performance: true
+          # 增加 Netty 工作线程和业务线程
+          worker-group-thread: 32
+          public-executor-thread: 64
+          # 增大 TCP 缓冲区，防止突发流量丢包
+          snd-buf-size: 131072
+          rcv-buf-size: 131072
           default-password: ClueCon
           # 配置服务器地址和端口
           servers:
@@ -60,5 +68,6 @@ link:
           # 让底层框架自动发送的订阅命令 (不要加 plain，框架会自动加)
           events:
             - GATEWAY_STATE GATEWAY_ADD GATEWAY_DEL CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_DESTROY
+            - RECORD_START RECORD_STOP
             - CUSTOM sofia::register sofia::unregister sofia::expire sofia::gateway_state sofia::gateway_add sofia::gateway_del sofia::gateway_update
 

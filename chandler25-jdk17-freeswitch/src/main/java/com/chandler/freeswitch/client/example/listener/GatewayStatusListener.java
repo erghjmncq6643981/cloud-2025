@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 网关状态事件监听器
@@ -24,7 +24,7 @@ import java.time.LocalDateTime;
 @Component
 // 【改造点1】：同时订阅 CUSTOM 事件和原生的 GATEWAY 事件
 @EslEventName({"CUSTOM", "GATEWAY_STATE", "GATEWAY_ADD", "GATEWAY_DEL"})
-public class GatewayStatusEventListener implements EslEventHandler {
+public class GatewayStatusListener implements EslEventHandler {
 
     @Autowired
     private GatewayStatusService gatewayStatusService;
@@ -36,16 +36,21 @@ public class GatewayStatusEventListener implements EslEventHandler {
         // 【关键调试点】：打印所有进入该处理器的事件，看看有没有 GATEWAY_STATE
         log.debug("🔍 监听到事件: {}, 来自: {}", eventName, addr);
 
-        try {
-            if ("CUSTOM".equals(eventName)) {
-                handleCustomEvent(event);
-            } else if (eventName.startsWith("GATEWAY_")) {
-                // 如果是原生事件，直接处理，不检查 Event-Subclass
-                handleNativeGatewayEvent(event);
+        // 2. 扔进异步任务（推荐使用 Spring 的 @Async 或 自定义 ExecutorService）
+        CompletableFuture.runAsync(() -> {
+            try {
+                if ("CUSTOM".equals(eventName)) {
+                    handleCustomEvent(event);
+                } else if (eventName.startsWith("GATEWAY_")) {
+                    // 如果是原生事件，直接处理，不检查 Event-Subclass
+                    handleNativeGatewayEvent(event);
+                }
+            } catch (Exception e) {
+                log.error("处理网关事件异常", e);
             }
-        } catch (Exception e) {
-            log.error("处理网关事件异常", e);
-        }
+        });
+
+
     }
 
     /**
@@ -100,34 +105,22 @@ public class GatewayStatusEventListener implements EslEventHandler {
         try {
             String gatewayName = event.getEventHeaders().get("Gateway");
             String state = event.getEventHeaders().get("State");
-            log.info("📍 网关状态明细 -> 名: {}, 状态: {}", gatewayName, state);
-            String register = event.getEventHeaders().get("Register");
-            String pingStatus = event.getEventHeaders().get("Ping-Status");
-            String pingTime = event.getEventHeaders().get("Ping-Time");
-            String networkIp = event.getEventHeaders().get("Network-IP");
-            String networkPort = event.getEventHeaders().get("Network-Port");
+            String profileName = event.getEventHeaders().get("Profile");
+            String hostname = event.getEventHeaders().get("FreeSWITCH-Hostname");
 
             log.info("🌐 [GATEWAY STATE] 网关状态变更");
             log.info("  - 网关名称: {}", gatewayName);
             log.info("  - 状态: {}", state);
-            log.info("  - 注册状态: {}", register);
-            log.info("  - Ping状态: {}", pingStatus);
-            log.info("  - Ping时间: {}", pingTime);
-            log.info("  - 网络地址: {}:{}", networkIp, networkPort);
+            log.info("  - Profile: {}", profileName);
+            log.info("  - 主机名: {}", hostname);
 
             if (gatewayName != null && state != null) {
-                GatewayStatus.Status gatewayStatusEnum = mapGatewayState(state);
-
                 GatewayStatus gatewayStatus = GatewayStatus.builder()
                         .gatewayName(gatewayName)
-                        .status(gatewayStatusEnum.name())
-                        .statusDescription(gatewayStatusEnum.getDescription() + " - " + state)
-                        .registerStatus(register)
-                        .pingStatus(pingStatus)
-                        .pingTime(pingTime)
-                        .networkIp(networkIp)
-                        .networkPort(networkPort)
-                        .updateTime(LocalDateTime.now())
+                        .profileName(profileName)
+                        .state(state)
+                        .statusDescription("网关状态: " + state)
+                        .hostname(hostname)
                         .build();
 
                 gatewayStatusService.updateGatewayStatus(gatewayStatus);
@@ -145,26 +138,20 @@ public class GatewayStatusEventListener implements EslEventHandler {
     private void handleGatewayAdd(EslEvent event) {
         try {
             String gatewayName = event.getEventHeaders().get("Gateway");
-            String profile = event.getEventHeaders().get("Profile");
-            String domain = event.getEventHeaders().get("Domain");
-            String fromDomain = event.getEventHeaders().get("From-Domain");
-            String toDomain = event.getEventHeaders().get("To-Domain");
+            String profileName = event.getEventHeaders().get("Profile");
+            String hostname = event.getEventHeaders().get("FreeSWITCH-Hostname");
 
             log.info("➕ [GATEWAY ADD] 网关添加");
             log.info("  - 网关名称: {}", gatewayName);
-            log.info("  - 配置文件: {}", profile);
-            log.info("  - 域名: {}", domain);
+            log.info("  - 配置文件: {}", profileName);
 
             if (gatewayName != null) {
                 GatewayStatus gatewayStatus = GatewayStatus.builder()
                         .gatewayName(gatewayName)
-                        .status(GatewayStatus.Status.REGISTERING.name())
+                        .profileName(profileName)
+                        .state("REGISTERING")
                         .statusDescription("网关已加载，等待注册...")
-                        .profile(profile)
-                        .domain(domain)
-                        .fromDomain(fromDomain)
-                        .toDomain(toDomain)
-                        .updateTime(LocalDateTime.now())
+                        .hostname(hostname)
                         .build();
 
                 gatewayStatusService.updateGatewayStatus(gatewayStatus);
@@ -176,52 +163,22 @@ public class GatewayStatusEventListener implements EslEventHandler {
     }
 
     /**
-     * 处理网关删除事件
-     */
-    private void handleGatewayDel(EslEvent event) {
-        try {
-            String gatewayName = event.getEventHeaders().get("Gateway");
-            String profile = event.getEventHeaders().get("Profile");
-            String reason = event.getEventHeaders().get("Reason");
-
-            log.info("➖ [GATEWAY DEL] 网关删除 - 网关: {}", gatewayName);
-
-            if (gatewayName != null) {
-                GatewayStatus gatewayStatus = GatewayStatus.builder()
-                        .gatewayName(gatewayName)
-                        .status(GatewayStatus.Status.UNREGISTERING.name())
-                        .statusDescription("网关已被移除 - " + (reason != null ? reason : "Unknown"))
-                        .profile(profile)
-                        .reason(reason)
-                        .updateTime(LocalDateTime.now())
-                        .build();
-
-                gatewayStatusService.updateGatewayStatus(gatewayStatus);
-            }
-
-        } catch (Exception e) {
-            log.error("Error handling GATEWAY_DEL event", e);
-        }
-    }
-
-    /**
      * 处理网关更新事件
      */
     private void handleGatewayUpdate(EslEvent event) {
         try {
             String gatewayName = event.getEventHeaders().get("Gateway");
-            String profile = event.getEventHeaders().get("Profile");
+            String profileName = event.getEventHeaders().get("Profile");
             String state = event.getEventHeaders().get("State");
+            String hostname = event.getEventHeaders().get("FreeSWITCH-Hostname");
 
             if (gatewayName != null && state != null) {
-                GatewayStatus.Status gatewayStatusEnum = mapGatewayState(state);
-
                 GatewayStatus gatewayStatus = GatewayStatus.builder()
                         .gatewayName(gatewayName)
-                        .status(gatewayStatusEnum.name())
+                        .profileName(profileName)
+                        .state(state)
                         .statusDescription("网关已更新 - " + state)
-                        .profile(profile)
-                        .updateTime(LocalDateTime.now())
+                        .hostname(hostname)
                         .build();
 
                 gatewayStatusService.updateGatewayStatus(gatewayStatus);
@@ -240,14 +197,16 @@ public class GatewayStatusEventListener implements EslEventHandler {
             String gatewayName = event.getEventHeaders().get("Gateway");
             String substate = event.getEventHeaders().get("Substate");
             String state = event.getEventHeaders().get("State");
+            String profileName = event.getEventHeaders().get("Profile");
+            String hostname = event.getEventHeaders().get("FreeSWITCH-Hostname");
 
             if (gatewayName != null && substate != null) {
                 GatewayStatus gatewayStatus = GatewayStatus.builder()
                         .gatewayName(gatewayName)
-                        .status(mapGatewayState(state != null ? state : "UNKNOWN").name())
+                        .profileName(profileName)
+                        .state(state != null ? state : "UNKNOWN")
                         .statusDescription("网关子状态: " + substate)
-                        .substate(substate)
-                        .updateTime(LocalDateTime.now())
+                        .hostname(hostname)
                         .build();
 
                 gatewayStatusService.updateGatewayStatus(gatewayStatus);
@@ -265,21 +224,18 @@ public class GatewayStatusEventListener implements EslEventHandler {
         try {
             String gatewayName = event.getEventHeaders().get("Gateway");
             String pingStatus = event.getEventHeaders().get("Ping-Status");
-            String pingTime = event.getEventHeaders().get("Ping-Time");
-            String networkIp = event.getEventHeaders().get("Network-IP");
+            String profileName = event.getEventHeaders().get("Profile");
+            String hostname = event.getEventHeaders().get("FreeSWITCH-Hostname");
 
             if (gatewayName != null && pingStatus != null) {
-                GatewayStatus.Status status = "SUCCESS".equalsIgnoreCase(pingStatus) ?
-                        GatewayStatus.Status.REGISTED : GatewayStatus.Status.FAILED;
+                String state = "SUCCESS".equalsIgnoreCase(pingStatus) ? "REGED" : "FAILED";
 
                 GatewayStatus gatewayStatus = GatewayStatus.builder()
                         .gatewayName(gatewayName)
-                        .status(status.name())
+                        .profileName(profileName)
+                        .state(state)
                         .statusDescription("Ping状态: " + pingStatus)
-                        .pingStatus(pingStatus)
-                        .pingTime(pingTime)
-                        .networkIp(networkIp)
-                        .updateTime(LocalDateTime.now())
+                        .hostname(hostname)
                         .build();
 
                 gatewayStatusService.updateGatewayStatus(gatewayStatus);
@@ -294,34 +250,32 @@ public class GatewayStatusEventListener implements EslEventHandler {
     /**
      * 映射网关状态
      */
-    private GatewayStatus.Status mapGatewayState(String state) {
+    private String mapGatewayState(String state) {
         if (state == null) {
-            return GatewayStatus.Status.UNKNOWN;
+            return "UNKNOWN";
         }
 
         switch (state.toUpperCase()) {
             case "REGISTED":
-                return GatewayStatus.Status.REGISTED;
+            case "REGED":
+                return "REGED";
             case "UNREGISTED":
-                return GatewayStatus.Status.UNREGISTED;
-            case "REGISTERING":
-                return GatewayStatus.Status.REGISTERING;
-            case "UNREGISTERING":
-                return GatewayStatus.Status.UNREGISTERING;
-            case "FAILED":
-                return GatewayStatus.Status.FAILED;
-            case "NO_RESPONSE":
-                return GatewayStatus.Status.NO_RESPONSE;
-            case "TIMEOUT":
-                return GatewayStatus.Status.TIMEOUT;
-            case "TRYING":
-                return GatewayStatus.Status.REGISTERING;
             case "NOREG":
-                return GatewayStatus.Status.UNREGISTED;
+                return "NOREG";
+            case "REGISTERING":
+            case "TRYING":
+                return "TRYING";
+            case "UNREGISTERING":
+                return "UNREGISTERING";
+            case "FAILED":
             case "FAIL_WAIT":
-                return GatewayStatus.Status.FAILED;
+                return "FAILED";
+            case "NO_RESPONSE":
+                return "NO_RESPONSE";
+            case "TIMEOUT":
+                return "TIMEOUT";
             default:
-                return GatewayStatus.Status.UNKNOWN;
+                return "UNKNOWN";
         }
     }
 }

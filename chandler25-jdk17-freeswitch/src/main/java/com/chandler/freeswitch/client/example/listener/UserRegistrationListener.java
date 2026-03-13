@@ -11,42 +11,46 @@ import org.springframework.stereotype.Component;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Component
 @EslEventName("CUSTOM")
-public class UserStatusEventListener implements EslEventHandler {
+public class UserRegistrationListener implements EslEventHandler {
 
     @Autowired
     private UserStatusService userStatusService;
 
     @Override
     public void handle(String addr, EslEvent event) {
-        try {
-            String eventSubclassRaw = event.getEventHeaders().get("Event-Subclass");
-
-            if (eventSubclassRaw != null) {
+        // 1. 极速提取核心字段（必须在当前线程完成）
+        String eventName = event.getEventName();
+        String eventSubclassRaw = event.getEventHeaders().get("Event-Subclass");
+        CompletableFuture.runAsync(()->{
+            try {
                 // 防范 URL 编码陷阱！
                 String eventSubclass = URLDecoder.decode(eventSubclassRaw, StandardCharsets.UTF_8.name());
 
-                switch (eventSubclass) {
-                    case "sofia::register":
-                        handleSipRegister(event);
-                        break;
-                    case "sofia::unregister":
-                        handleSipUnregister(event);
-                        break;
-                    case "sofia::expire":
-                        handleSipExpire(event);
-                        break;
-                    default:
-                        log.debug("Unhandled CUSTOM event subclass: {}", eventSubclass);
+                if (eventSubclassRaw != null) {
+
+                    switch (eventSubclass) {
+                        case "sofia::register":
+                            handleSipRegister(event);
+                            break;
+                        case "sofia::unregister":
+                            handleSipUnregister(event);
+                            break;
+                        case "sofia::expire":
+                            handleSipExpire(event);
+                            break;
+                        default:
+                            log.debug("Unhandled CUSTOM event subclass: {}", eventSubclass);
+                    }
                 }
+            } catch (Exception e) {
+                log.error("Error handling CUSTOM event", e);
             }
-        } catch (Exception e) {
-            log.error("Error handling CUSTOM event", e);
-        }
+        });
     }
 
     private void handleSipRegister(EslEvent event) {
@@ -55,6 +59,7 @@ public class UserStatusEventListener implements EslEventHandler {
             String fromHost = event.getEventHeaders().get("from-host");
             String status = event.getEventHeaders().get("status");
             String networkIp = event.getEventHeaders().get("network-ip");
+            String userAgent = event.getEventHeaders().get("user-agent");
 
             log.info("🎉 [SIP REGISTER] 账号成功注册! 账号: {}@{}, 来源 IP: {}, 状态: {}",
                     fromUser, fromHost, networkIp, status);
@@ -62,10 +67,11 @@ public class UserStatusEventListener implements EslEventHandler {
             if (fromUser != null && !fromUser.isEmpty()) {
                 UserStatus userStatus = UserStatus.builder()
                         .userId(fromUser)
-                        .status(UserStatus.Status.REGISTERED.name())
+                        .status("REGISTERED")
                         .statusDescription("SIP已注册 - " + status)
-                        .callerNumber(fromUser)
-                        .updateTime(LocalDateTime.now())
+                        .networkIp(networkIp)
+                        .userAgent(userAgent)
+                        .callStatus("IDLE")
                         .build();
                 userStatusService.updateUserStatus(userStatus);
             }
@@ -85,16 +91,13 @@ public class UserStatusEventListener implements EslEventHandler {
 
             log.info("👋 [SIP UNREGISTER] 账号成功注销 - User: {}@{}, Reason: {}", fromUser, fromHost, reason);
 
-            // 更新用户状态为注销
             if (fromUser != null && !fromUser.isEmpty()) {
                 UserStatus userStatus = UserStatus.builder()
                         .userId(fromUser)
-                        .status(UserStatus.Status.UNREGISTERED.name())
+                        .status("UNREGISTERED")
                         .statusDescription("SIP已注销 - " + (reason != null ? reason : "Unknown"))
                         .channelUuid(null)
-                        .destinationNumber(null)
-                        .callerNumber(fromUser)
-                        .updateTime(LocalDateTime.now())
+                        .callStatus("IDLE")
                         .build();
 
                 userStatusService.updateUserStatus(userStatus);
@@ -118,12 +121,10 @@ public class UserStatusEventListener implements EslEventHandler {
             if (fromUser != null && !fromUser.isEmpty()) {
                 UserStatus userStatus = UserStatus.builder()
                         .userId(fromUser)
-                        .status(UserStatus.Status.EXPIRED.name())
+                        .status("EXPIRED")
                         .statusDescription("SIP注册已过期")
                         .channelUuid(null)
-                        .destinationNumber(null)
-                        .callerNumber(fromUser)
-                        .updateTime(LocalDateTime.now())
+                        .callStatus("IDLE")
                         .build();
 
                 userStatusService.updateUserStatus(userStatus);

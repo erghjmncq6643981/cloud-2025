@@ -1,11 +1,14 @@
 package com.chandler.freeswitch.client.example.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.chandler.freeswitch.client.example.domain.dataobject.GatewayStatus;
+import com.chandler.freeswitch.client.example.domain.mapper.GatewayStatusMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 网关状态服务
@@ -13,88 +16,93 @@ import java.util.concurrent.ConcurrentHashMap;
  * @author chandler
  * @since 1.0
  */
+@Slf4j
 @Service
-public class GatewayStatusService {
-    
-    private final Map<String, GatewayStatus> gatewayStatusMap = new ConcurrentHashMap<>();
+public class GatewayStatusService extends ServiceImpl<GatewayStatusMapper, GatewayStatus> {
     
     /**
-     * 更新网关状态
+     * 更新网关状态（存在则更新，不存在则插入）
      */
+    @Transactional(rollbackFor = Exception.class)
     public void updateGatewayStatus(GatewayStatus gatewayStatus) {
-        gatewayStatusMap.put(gatewayStatus.getGatewayName(), gatewayStatus);
+        GatewayStatus existing = getOne(
+            new LambdaQueryWrapper<GatewayStatus>()
+                .eq(GatewayStatus::getGatewayName, gatewayStatus.getGatewayName())
+        );
+        
+        if (existing != null) {
+            gatewayStatus.setId(existing.getId());
+            updateById(gatewayStatus);
+            log.debug("更新网关状态: {}", gatewayStatus.getGatewayName());
+        } else {
+            save(gatewayStatus);
+            log.debug("插入网关状态: {}", gatewayStatus.getGatewayName());
+        }
     }
     
     /**
      * 获取网关状态
      */
     public GatewayStatus getGatewayStatus(String gatewayName) {
-        return gatewayStatusMap.get(gatewayName);
+        return getOne(
+            new LambdaQueryWrapper<GatewayStatus>()
+                .eq(GatewayStatus::getGatewayName, gatewayName)
+        );
     }
     
     /**
      * 获取所有网关状态
      */
     public List<GatewayStatus> getAllGatewayStatus() {
-        return List.copyOf(gatewayStatusMap.values());
+        return list();
     }
     
     /**
-     * 删除网关状态
+     * 删除网关状态（逻辑删除）
      */
+    @Transactional(rollbackFor = Exception.class)
     public void removeGatewayStatus(String gatewayName) {
-        gatewayStatusMap.remove(gatewayName);
+        remove(
+            new LambdaQueryWrapper<GatewayStatus>()
+                .eq(GatewayStatus::getGatewayName, gatewayName)
+        );
     }
     
     /**
-     * 清空所有网关状态
+     * 清空所有网关状态（逻辑删除）
      */
+    @Transactional(rollbackFor = Exception.class)
     public void clearAllGatewayStatus() {
-        gatewayStatusMap.clear();
+        remove(new LambdaQueryWrapper<>());
     }
     
     /**
      * 获取指定状态的网关列表
      */
     public List<GatewayStatus> getGatewaysByStatus(String status) {
-        return gatewayStatusMap.values().stream()
-            .filter(gatewayStatus -> status.equals(gatewayStatus.getStatus()))
-            .toList();
+        return list(
+            new LambdaQueryWrapper<GatewayStatus>()
+                .eq(GatewayStatus::getState, status)
+        );
     }
     
     /**
      * 获取在线网关数量
      */
     public long getOnlineGatewayCount() {
-        return gatewayStatusMap.values().stream()
-            .filter(gatewayStatus -> GatewayStatus.Status.REGISTED.name().equals(gatewayStatus.getStatus()))
-            .count();
+        return count(
+            new LambdaQueryWrapper<GatewayStatus>()
+                .eq(GatewayStatus::getState, "REGED")
+        );
     }
     
     /**
      * 获取离线网关数量
      */
     public long getOfflineGatewayCount() {
-        return gatewayStatusMap.values().stream()
-            .filter(gatewayStatus -> !GatewayStatus.Status.REGISTED.name().equals(gatewayStatus.getStatus()))
-            .count();
-    }
-    
-    /**
-     * 获取总会话数
-     */
-    public int getTotalSessions() {
-        return gatewayStatusMap.values().stream()
-            .mapToInt(gateway -> gateway.getCurrentSessions() != null ? gateway.getCurrentSessions() : 0)
-            .sum();
-    }
-    
-    /**
-     * 获取最大会话数
-     */
-    public int getMaxSessions() {
-        return gatewayStatusMap.values().stream()
-            .mapToInt(gateway -> gateway.getMaxSessions() != null ? gateway.getMaxSessions() : 0)
-            .sum();
+        return count(
+            new LambdaQueryWrapper<GatewayStatus>()
+                .ne(GatewayStatus::getState, "REGED")
+        );
     }
 }
