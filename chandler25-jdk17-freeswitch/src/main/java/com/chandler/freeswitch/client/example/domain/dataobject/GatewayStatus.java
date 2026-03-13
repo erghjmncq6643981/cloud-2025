@@ -70,6 +70,61 @@ public class GatewayStatus {
     private LocalDateTime updateTime;
     
     /**
+     * 注册状态
+     */
+    private String registerStatus;
+    
+    /**
+     * Ping状态
+     */
+    private String pingStatus;
+    
+    /**
+     * Ping时间
+     */
+    private String pingTime;
+    
+    /**
+     * 网络IP地址
+     */
+    private String networkIp;
+    
+    /**
+     * 网络端口
+     */
+    private String networkPort;
+    
+    /**
+     * 配置文件
+     */
+    private String profile;
+    
+    /**
+     * 域名
+     */
+    private String domain;
+    
+    /**
+     * 源域名
+     */
+    private String fromDomain;
+    
+    /**
+     * 目标域名
+     */
+    private String toDomain;
+    
+    /**
+     * 子状态
+     */
+    private String substate;
+    
+    /**
+     * 操作原因
+     */
+    private String reason;
+    
+    /**
      * 状态枚举
      */
     public enum Status {

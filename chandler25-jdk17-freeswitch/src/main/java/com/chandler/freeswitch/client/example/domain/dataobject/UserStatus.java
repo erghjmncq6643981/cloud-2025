@@ -65,6 +65,9 @@ public class UserStatus {
         BRIDGE("通话中"),
         HOLD("保持"),
         PARKED("驻留"),
+        REGISTERED("已注册"),
+        UNREGISTERED("已注销"),
+        EXPIRED("已过期"),
         UNKNOWN("未知");
         
         private final String description;
