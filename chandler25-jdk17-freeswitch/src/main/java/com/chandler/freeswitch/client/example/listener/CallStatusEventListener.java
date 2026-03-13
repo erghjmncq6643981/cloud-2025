@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
  */
 @Slf4j
 @Component
-@EslEventName({"CUSTOM", "CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_BRIDGE", "CHANNEL_HANGUP"})
+@EslEventName({"CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_BRIDGE", "CHANNEL_UNBRIDGE", "CHANNEL_HANGUP", "CHANNEL_DESTROY"})
 public class CallStatusEventListener implements EslEventHandler {
 
     @Autowired
@@ -24,7 +24,8 @@ public class CallStatusEventListener implements EslEventHandler {
 
     @Override
     public void handle(String addr, EslEvent event) {
-
+        // 第一行：无视任何条件，直接打印事件名！
+        log.info("📢！！！【底层捕获】接收到 ESL 事件: {}", event.getEventName());
         String eventName = event.getEventName();
         String uuid = event.getEventHeaders().get("Unique-ID");
         String direction = event.getEventHeaders().get("Call-Direction");

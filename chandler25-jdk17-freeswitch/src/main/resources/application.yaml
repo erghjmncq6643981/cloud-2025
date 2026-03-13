@@ -59,4 +59,6 @@ link:
               timeout-seconds: 5
           # 让底层框架自动发送的订阅命令 (不要加 plain，框架会自动加)
           events:
-            - CUSTOM sofia::register sofia::unregister sofia::expire sofia::gateway_state sofia::gateway_add sofia::gateway_del sofia::gateway_update GATEWAY_STATE GATEWAY_ADD GATEWAY_DEL CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_DESTROY
+            - GATEWAY_STATE GATEWAY_ADD GATEWAY_DEL CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_DESTROY
+            - CUSTOM sofia::register sofia::unregister sofia::expire sofia::gateway_state sofia::gateway_add sofia::gateway_del sofia::gateway_update
+
