@@ -69,5 +69,6 @@ link:
           events:
             - GATEWAY_STATE GATEWAY_ADD GATEWAY_DEL CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_DESTROY
             - RECORD_START RECORD_STOP
+            - DTMF
             - CUSTOM sofia::register sofia::unregister sofia::expire sofia::gateway_state sofia::gateway_add sofia::gateway_del sofia::gateway_update
 

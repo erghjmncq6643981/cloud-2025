@@ -1,0 +1,80 @@
+{
+  "flowCode": "leave-demo",
+  "flowName": "请假审批演示流程",
+  "category": "Warm-Flow学习",
+  "formCustom": "N",
+  "formPath": "demo/leave/form",
+  "version": "1",
+  "ext": "warm-flow demo",
+  "nodeList": [
+    {
+      "coordinate": "120,220|120,220",
+      "nodeCode": "1",
+      "nodeName": "发起请假",
+      "nodeRatio": 0.0,
+      "nodeType": 0,
+      "skipList": [
+        {
+          "coordinate": "150,220;320,220",
+          "nowNodeCode": "1",
+          "nextNodeCode": "2",
+          "skipName": "提交申请",
+          "skipType": "PASS"
+        }
+      ]
+    },
+    {
+      "coordinate": "380,220|380,220",
+      "nodeCode": "2",
+      "nodeName": "直属主管审批",
+      "nodeRatio": 0.0,
+      "nodeType": 1,
+      "skipList": [
+        {
+          "coordinate": "430,220;600,220",
+          "nowNodeCode": "2",
+          "nextNodeCode": "3",
+          "skipName": "主管通过",
+          "skipType": "PASS"
+        },
+        {
+          "coordinate": "380,260;380,360;840,360;840,260",
+          "nowNodeCode": "2",
+          "nextNodeCode": "4",
+          "skipName": "主管驳回",
+          "skipType": "REJECT"
+        }
+      ]
+    },
+    {
+      "coordinate": "660,220|660,220",
+      "nodeCode": "3",
+      "nodeName": "HR审批",
+      "nodeRatio": 0.0,
+      "nodeType": 1,
+      "skipList": [
+        {
+          "coordinate": "710,220;860,220",
+          "nowNodeCode": "3",
+          "nextNodeCode": "4",
+          "skipName": "HR通过",
+          "skipType": "PASS"
+        },
+        {
+          "coordinate": "660,260;660,340;840,340;840,260",
+          "nowNodeCode": "3",
+          "nextNodeCode": "4",
+          "skipName": "HR驳回",
+          "skipType": "REJECT"
+        }
+      ]
+    },
+    {
+      "coordinate": "920,220|920,220",
+      "nodeCode": "4",
+      "nodeName": "流程结束",
+      "nodeRatio": 0.0,
+      "nodeType": 2
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+@host = http://localhost:17680
+@leaveRequestId = 2039590995959435266
+@taskId = 2039590996114624513
+
+### 1. 初始化示例流程定义
+POST {{host}}/warm-flow/demo/definition/init
+Content-Type: application/json
+
+{}
+
+### 2. 发起请假流程
+POST {{host}}/warm-flow/demo/leave/start
+Content-Type: application/json
+
+{
+  "applicantId": "u1001",
+  "applicantName": "Chandler",
+  "days": 3,
+  "reason": "学习 Warm-Flow",
+  "variables": {
+    "department": "R&D"
+  }
+}
+
+### 3. 根据业务ID查看请假单和待办
+GET {{host}}/warm-flow/demo/leave/{{leaveRequestId}}
+
+### 4. 主管审批通过
+POST {{host}}/warm-flow/demo/task/pass
+Content-Type: application/json
+
+{
+  "taskId": {{taskId}},
+  "handler": "manager-001",
+  "comment": "主管审批通过"
+}
+
+### 5. HR审批通过
+POST {{host}}/warm-flow/demo/task/pass
+Content-Type: application/json
+
+{
+  "taskId": {{taskId}},
+  "handler": "hr-001",
+  "comment": "HR审批通过"
+}
+
+### 6. 驳回示例
+POST {{host}}/warm-flow/demo/task/reject
+Content-Type: application/json
+
+{
+  "taskId": {{taskId}},
+  "handler": "manager-001",
+  "comment": "资料不完整，驳回"
+}
