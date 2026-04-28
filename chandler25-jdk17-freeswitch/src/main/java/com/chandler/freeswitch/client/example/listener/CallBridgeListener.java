@@ -11,7 +11,7 @@
  */
 package com.chandler.freeswitch.client.example.listener;
 
-import link.thingscloud.freeswitch.esl.InboundClient;
+import com.chandler.freeswitch.client.example.command.FreeSwitchCommandGateway;
 import link.thingscloud.freeswitch.esl.spring.boot.starter.annotation.EslEventName;
 import link.thingscloud.freeswitch.esl.spring.boot.starter.handler.EslEventHandler;
 import link.thingscloud.freeswitch.esl.transport.event.EslEvent;
@@ -35,7 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CallBridgeListener implements EslEventHandler {
 
     @Autowired
-    private InboundClient inboundClient;
+    private FreeSwitchCommandGateway commandGateway;
 
     // 使用本地缓存或 Redis 记录已经接通的通道信息
     private Map<String, Map<String, String>> taskMap = new ConcurrentHashMap<>();
@@ -73,8 +73,7 @@ public class CallBridgeListener implements EslEventHandler {
             log.info("🔗 双方已就绪，开始执行强制桥接: {} <-> {}", uuidA, uuidB);
 
             // 4. 下发最终桥接指令
-            inboundClient.sendAsyncApiCommand("127.0.0.1:8022",
-                    "uuid_bridge " + uuidA + " " + uuidB, null);
+            commandGateway.bridge(uuidA, uuidB);
 
             taskMap.remove(bizId); // 桥接指令发出后清理缓存
         }

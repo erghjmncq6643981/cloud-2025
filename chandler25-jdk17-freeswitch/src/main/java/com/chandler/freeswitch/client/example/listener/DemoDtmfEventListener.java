@@ -1,6 +1,6 @@
 package com.chandler.freeswitch.client.example.listener;
 
-import link.thingscloud.freeswitch.esl.InboundClient;
+import com.chandler.freeswitch.client.example.command.FreeSwitchCommandGateway;
 import link.thingscloud.freeswitch.esl.spring.boot.starter.annotation.EslEventName;
 import link.thingscloud.freeswitch.esl.spring.boot.starter.handler.EslEventHandler;
 import link.thingscloud.freeswitch.esl.transport.event.EslEvent;
@@ -13,17 +13,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Demo IVR 监听器：负责监听 IVR 通话的接通事件和用户按键事件
+ * Demo DTMF 监听器：负责监听通话的接通事件和用户按键事件
  */
 @Slf4j
 @Component
 @EslEventName({"CHANNEL_ANSWER", "DTMF"})
-public class DemoIvrEventListener implements EslEventHandler {
-
-    private final static String fsAddr = "127.0.0.1:8022";
+public class DemoDtmfEventListener implements EslEventHandler {
 
     @Autowired
-    private InboundClient inboundClient;
+    private FreeSwitchCommandGateway commandGateway;
 
     // 记录活跃的 IVR 任务：UUID -> 音频文件路径
     private final Map<String, String> activeIvrTasks = new ConcurrentHashMap<>();
@@ -63,18 +61,14 @@ public class DemoIvrEventListener implements EslEventHandler {
             log.info("📞 [IVR Demo] 通道 {} 已接通，准备播放语音: {}", uuid, audioFile);
 
             // 异步执行播放语音指令
-            String arg = String.format("%s 'play_and_get_digits:1 1 3 5000 # /private/tmp/freeswitch/1777281321510.wav silence_stream://250 dtmf_var \\d+,park' inline", uuid, audioFile);
-            String resp = inboundClient.sendAsyncApiCommand(fsAddr, "uuid_transfer", arg);
-            log.info("指令:uuid_transfer {};resp:{};", arg, resp);
+            commandGateway.playAndGetDigitsThenPark(uuid, audioFile);
         } else if ("DTMF".equals(eventName)) {
             String digit = headers.get("DTMF-Digit");
             log.info("🎹 [IVR Demo] 通道 {} 监听到用户按键: {}", uuid, digit);
 
             // 监听到按键后，立即挂断该呼叫
-            String arg = String.format("%s NORMAL_CLEARING", uuid);
             log.info("👋 [IVR Demo] 已触发按键挂断，下发挂断指令...");
-            String resp = inboundClient.sendAsyncApiCommand(fsAddr, "uuid_kill", arg);
-            log.info("指令:{};resp:{};", arg, resp);
+            commandGateway.kill(uuid);
 
             // 任务结束，清理缓存
             activeIvrTasks.remove(uuid);
