@@ -105,34 +105,4 @@ public class UserStatusService extends ServiceImpl<UserStatusMapper, UserStatus>
                 .eq(UserStatus::getStatus, "IDLE")
         );
     }
-    
-    /**
-     * 根据通话状态获取用户列表
-     */
-    public List<UserStatus> getUsersByCallStatus(String callStatus) {
-        return list(
-            new LambdaQueryWrapper<UserStatus>()
-                .eq(UserStatus::getCallStatus, callStatus)
-        );
-    }
-    
-    /**
-     * 获取通话中的用户数量
-     */
-    public long getBusyUserCount() {
-        return count(
-            new LambdaQueryWrapper<UserStatus>()
-                .eq(UserStatus::getCallStatus, "BUSY")
-        );
-    }
-    
-    /**
-     * 获取振铃中的用户数量
-     */
-    public long getRingingUserCount() {
-        return count(
-            new LambdaQueryWrapper<UserStatus>()
-                .eq(UserStatus::getCallStatus, "RINGING")
-        );
-    }
 }

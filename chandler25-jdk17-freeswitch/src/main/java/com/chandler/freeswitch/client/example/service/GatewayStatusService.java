@@ -56,18 +56,7 @@ public class GatewayStatusService extends ServiceImpl<GatewayStatusMapper, Gatew
     public List<GatewayStatus> getAllGatewayStatus() {
         return list();
     }
-    
-    /**
-     * 删除网关状态（逻辑删除）
-     */
-    @Transactional(rollbackFor = Exception.class)
-    public void removeGatewayStatus(String gatewayName) {
-        remove(
-            new LambdaQueryWrapper<GatewayStatus>()
-                .eq(GatewayStatus::getGatewayName, gatewayName)
-        );
-    }
-    
+
     /**
      * 清空所有网关状态（逻辑删除）
      */
@@ -86,23 +75,4 @@ public class GatewayStatusService extends ServiceImpl<GatewayStatusMapper, Gatew
         );
     }
     
-    /**
-     * 获取在线网关数量
-     */
-    public long getOnlineGatewayCount() {
-        return count(
-            new LambdaQueryWrapper<GatewayStatus>()
-                .eq(GatewayStatus::getState, "REGED")
-        );
-    }
-    
-    /**
-     * 获取离线网关数量
-     */
-    public long getOfflineGatewayCount() {
-        return count(
-            new LambdaQueryWrapper<GatewayStatus>()
-                .ne(GatewayStatus::getState, "REGED")
-        );
-    }
 }
