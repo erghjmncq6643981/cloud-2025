@@ -21,7 +21,7 @@ spring:
     type: com.alibaba.druid.pool.DruidDataSource
   ai:
     openai:
-      api-key: sk-d65b8ad631f9469999a297bb3559da01   # 建议放到环境变量
+      api-key: sk-d65b8ad631fxxxx9a297bb3559da01   # 建议放到环境变量
       base-url: https://api.deepseek.com
       chat:
         options:
