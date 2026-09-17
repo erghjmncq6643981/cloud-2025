@@ -24,9 +24,10 @@ public class FreeSwitchCommandGateway {
 
     public FreeSwitchCommandGateway(
             InboundClient inboundClient,
-            @Value("${freeswitch.command.fs-addr:127.0.0.1:8022}") String fsAddr) {
+            @Value("${freeswitch.command.fs-addr:${link.thingscloud.freeswitch.esl.inbound.servers[0].host:127.0.0.1}:${link.thingscloud.freeswitch.esl.inbound.servers[0].port:8021}}") String fsAddr) {
         this.inboundClient = inboundClient;
         this.fsAddr = fsAddr;
+        log.info("FreeSwitchCommandGateway 绑定的 ESL 地址: {}", this.fsAddr);
     }
 
     /**
@@ -183,7 +184,7 @@ public class FreeSwitchCommandGateway {
      */
     public FreeSwitchCommandResult transferInline(String uuid, String inlineApplication) {
         String argument = safeToken(uuid, "uuid") + " '" + safeArgument(inlineApplication, "inlineApplication") + "' inline";
-        return sendAsync("uuid_transfer", argument, uuid);
+        return sendSyncIfSupported("uuid_transfer", argument, uuid);
     }
 
     /**
@@ -202,7 +203,7 @@ public class FreeSwitchCommandGateway {
         String argument = safeToken(uuid, "uuid")
                 + " " + safeArgument(mediaPath, "mediaPath")
                 + " " + safeToken(defaultIfBlank(leg, "aleg"), "leg");
-        return sendAsync("uuid_broadcast", argument, uuid);
+        return sendSyncIfSupported("uuid_broadcast", argument, uuid);
     }
 
     /**
@@ -211,7 +212,7 @@ public class FreeSwitchCommandGateway {
      */
     public FreeSwitchCommandResult stopPlayback(String uuid) {
         String argument = safeToken(uuid, "uuid") + " all";
-        return sendAsync("uuid_break", argument, uuid);
+        return sendSyncIfSupported("uuid_break", argument, uuid);
     }
 
     /**
@@ -238,7 +239,7 @@ public class FreeSwitchCommandGateway {
             String invalidAudioFile,
             String variableName,
             String regex) {
-        String application = String.format("play_and_get_digits:%d %d %d %d %s %s %s %s %s,park",
+        String application = String.format("start_dtmf,play_and_get_digits:%d %d %d %d %s %s %s %s %s,park",
                 minDigits,
                 maxDigits,
                 tries,
@@ -297,6 +298,21 @@ public class FreeSwitchCommandGateway {
     }
 
     /**
+     * 开启指定通道的带内 DTMF 音频检测器 (DSP检测)。
+     * 兼容发送 In-band 纯音频按键或协商异常的客户端 (如部分 Linphone 配置)。
+     */
+    public FreeSwitchCommandResult startDtmf(String uuid) {
+        return sendAsync("uuid_broadcast", safeToken(uuid, "uuid") + " start_dtmf", uuid);
+    }
+
+    /**
+     * 停止指定通道的带内 DTMF 检测。
+     */
+    public FreeSwitchCommandResult stopDtmf(String uuid) {
+        return sendAsync("uuid_broadcast", safeToken(uuid, "uuid") + " stop_dtmf", uuid);
+    }
+
+    /**
      * 将通道加入会议。
      * 用于验证三方通话或多方会议的基础能力。
      */
@@ -328,7 +344,7 @@ public class FreeSwitchCommandGateway {
      */
     public FreeSwitchCommandResult setVar(String uuid, String name, String value) {
         String argument = safeToken(uuid, "uuid") + " " + safeToken(name, "name") + " " + safeArgument(value, "value");
-        return sendAsync("uuid_setvar", argument, uuid);
+        return sendSyncIfSupported("uuid_setvar", argument, uuid);
     }
 
     /**

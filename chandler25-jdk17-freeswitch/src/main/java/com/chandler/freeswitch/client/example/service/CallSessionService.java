@@ -31,4 +31,15 @@ public class CallSessionService extends ServiceImpl<CallSessionMapper, CallSessi
         }
         updateById(callSession);
     }
+
+    public CallSession getByBizId(String bizId) {
+        if (bizId == null) {
+            return null;
+        }
+        return getOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CallSession>()
+                        .eq(CallSession::getBizId, bizId)
+                        .last("limit 1")
+        );
+    }
 }

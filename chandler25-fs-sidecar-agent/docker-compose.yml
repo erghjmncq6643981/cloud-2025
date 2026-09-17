@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: telephony-nats
+    restart: unless-stopped
+    ports:
+      - "4222:4222"   # NATS 客户端通信端口
+      - "8222:8222"   # NATS HTTP 监控管理大盘 (http://localhost:8222)
+    command: ["-js", "-m", "8222"] # 开启 JetStream 与监控大盘

@@ -1,0 +1,17 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: chandler26-jdk17-freeswitch-FCC
+
+fcc:
+  nats-url: nats://127.0.0.1:4222
+  default-node-id: qiandingjundeMacBook-Pro.local
+  ctrl-uuid-prefix: fcc-ctrl
+  rpc-timeout-millis: 5000
+
+logging:
+  level:
+    com.chandler.fcc: DEBUG
+    org.springframework: INFO
