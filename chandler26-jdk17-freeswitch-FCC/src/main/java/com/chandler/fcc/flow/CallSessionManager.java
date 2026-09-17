@@ -74,4 +74,10 @@ public class CallSessionManager {
             log.info("🗑️ [会话释放] CtrlUUID: {}, CallUUID: {}", ctrlUuid, info.getCallUuid());
         }
     }
+
+    public Optional<CallInfoBO> getLatestActiveSession() {
+        return ctrlSessions.values().stream()
+                .filter(s -> s.getData() != null && !"true".equals(s.getData().get("guestEnded")))
+                .reduce((first, second) -> second);
+    }
 }

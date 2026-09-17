@@ -65,14 +65,19 @@ public class ReadDTMFActionExecutor extends AbstractFccActionExecutor {
                 .voice("aiqi")
                 .build();
 
+        int timeout = Integer.parseInt(data.getOrDefault("timeout", "2000"));
+        int tries = Integer.parseInt(data.getOrDefault("tries", "2"));
+        int digitTimeout = Integer.parseInt(data.getOrDefault("digitTimeout", "2000"));
+
         FNodeReadDTMFDTO dtmfDTO = FNodeReadDTMFDTO.builder()
                 .ctrlUuid(ctrlUuid)
                 .uuid(targetUuid)
                 .media(media)
                 .minDigits(1)
                 .maxDigits(1)
-                .timeout(4000)
-                .digitTimeout(2000)
+                .tries(tries)
+                .timeout(timeout)
+                .digitTimeout(digitTimeout)
                 .terminators("#")
                 .thankYouFile(thankYouFile)
                 .regex(regex)

@@ -109,6 +109,42 @@ public class FlowConfig {
                 .order(1)
                 .data(Map.of("action", "START"))
                 .build());
+
+        // 3. 自动外呼通知流程 (AUTO_DIAL_NOTIFICATION):
+        String notifyModel = FlowModelType.AUTO_DIAL_NOTIFICATION.name();
+
+        // START 阶段: 自动外呼目标客户
+        addNode(notifyModel, CallStageState.START, FlowNode.builder()
+                .modelKey(notifyModel)
+                .modelType(FlowModelType.AUTO_DIAL_NOTIFICATION)
+                .stageState(CallStageState.START)
+                .actionKey("notify-dial-guest")
+                .actionType(ActionType.DIAL_GUEST)
+                .order(1)
+                .data(Map.of(
+                        "destNumber", "1008",
+                        "callerNumber", "9000"
+                ))
+                .build());
+
+        // ROUTE 阶段 (客户接听进入 Park): 播放通知语音并收号确认
+        addNode(notifyModel, CallStageState.ROUTE, FlowNode.builder()
+                .modelKey(notifyModel)
+                .modelType(FlowModelType.AUTO_DIAL_NOTIFICATION)
+                .stageState(CallStageState.ROUTE)
+                .actionKey("notify-play-read")
+                .actionType(ActionType.READ_DTMF)
+                .order(1)
+                .data(Map.of(
+                        "soundFile", "/Users/chandler/Documents/repository/github/cloud-2025/chandler26-jdk17-freeswitch-FCC/sounds/ivr_autodial.wav",
+                        "thankYouFile", "/Users/chandler/Documents/repository/github/cloud-2025/chandler26-jdk17-freeswitch-FCC/sounds/ivr_thankyou.wav",
+                        "regex", "[1-2]",
+                        "tries", "2",
+                        "timeout", "2000",
+                        "actionAfter", "hangup",
+                        "prompt", "您好，这里是售后服务中心。通知您，您申请的业务已受理成功。确认办理请按一，咨询详情请按二，稍后请留意手机短信。祝您生活愉快，再见！"
+                ))
+                .build());
     }
 
     private void addNode(String modelKey, CallStageState stage, FlowNode node) {

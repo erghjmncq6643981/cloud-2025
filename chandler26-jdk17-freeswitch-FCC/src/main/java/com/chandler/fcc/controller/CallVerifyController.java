@@ -9,6 +9,7 @@ import com.chandler.fcc.common.enums.DirectionType;
 import com.chandler.fcc.common.enums.FlowModelType;
 import com.chandler.fcc.common.util.IdUtil;
 import com.chandler.fcc.fcc.client.FccClient;
+import com.chandler.fcc.fcc.client.dto.FNodeDialDTO;
 import com.chandler.fcc.fcc.client.dto.FNodePlayDTO;
 import com.chandler.fcc.fcc.client.dto.FNodeReadDTMFDTO;
 import com.chandler.fcc.fcc.client.dto.FNodeRecordDTO;
@@ -21,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -100,6 +102,53 @@ public class CallVerifyController {
         resp.put("callUuid", callUuid);
         resp.put("ctrlUuid", ctrlUuid);
         resp.put("agentChannelUuid", agentCallUuid);
+        return resp;
+    }
+
+    /**
+     * 发起自动外呼通知流程验证 (AUTO_DIAL_NOTIFICATION)
+     */
+    @PostMapping("/call/notify")
+    public Map<String, Object> triggerNotifyCall(
+            @RequestParam(defaultValue = "1008") String destNumber,
+            @RequestParam(defaultValue = "9000") String callerNumber) {
+
+        String ctrlUuid = IdUtil.getCtrlUuid("fcc-notify");
+        String callUuid = IdUtil.getCallUuid();
+
+        log.info("📢 [测试触发自动通知] CtrlUUID: {}, CallUUID(Guest): {}, DestNumber: {}, CallerNumber: {}",
+                ctrlUuid, callUuid, destNumber, callerNumber);
+
+        Map<String, String> data = new HashMap<>();
+        data.put("destNumber", destNumber);
+        data.put("callerNumber", callerNumber);
+        data.put("ctrlUuid", ctrlUuid);
+        data.put("callUuid", callUuid);
+        data.put("guestChannelUuid", callUuid);
+
+        CallInfoBO callInfo = CallInfoBO.builder()
+                .callUuid(callUuid)
+                .ctrlUuid(ctrlUuid)
+                .guestChannelUuid(callUuid)
+                .modelKey(FlowModelType.AUTO_DIAL_NOTIFICATION.name())
+                .direction(DirectionType.outbound)
+                .stageState(CallStageState.START)
+                .callerNumber(callerNumber)
+                .destinationNumber(destNumber)
+                .data(data)
+                .build();
+
+        sessionManager.registerSession(callInfo);
+        sessionManager.bindChannel(callUuid, ctrlUuid);
+
+        publisher.publishEvent(new CallStartEvent(callInfo));
+
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("code", 200);
+        resp.put("message", "自动外呼通知流程已成功触发");
+        resp.put("callUuid", callUuid);
+        resp.put("ctrlUuid", ctrlUuid);
+        resp.put("destNumber", destNumber);
         return resp;
     }
 
@@ -243,6 +292,95 @@ public class CallVerifyController {
         resp.put("message", "客户呼入流程已成功触发");
         resp.put("callUuid", callUuid);
         resp.put("ctrlUuid", ctrlUuid);
+        return resp;
+    }
+
+    /**
+     * 10. 呼叫中心坐席工作台 - 呼叫转接接口 (Call Transfer)
+     * 将正在通话中的客户话道转接给目标坐席/分机 (如 1017)
+     */
+    @PostMapping("/call/transfer")
+    public Map<String, Object> transferCall(
+            @RequestParam(required = false) String ctrlUuid,
+            @RequestParam(defaultValue = "1017") String targetExt) {
+
+        CallInfoBO callInfo = null;
+        if (ctrlUuid != null && !ctrlUuid.trim().isEmpty()) {
+            callInfo = sessionManager.getByCtrlUuid(ctrlUuid).orElse(null);
+        } else {
+            callInfo = sessionManager.getLatestActiveSession().orElse(null);
+        }
+
+        if (callInfo == null) {
+            return Map.of("code", 404, "message", "未找到活跃的通话会话");
+        }
+
+        String actualCtrlUuid = callInfo.getCtrlUuid();
+        String originalAgentUuid = callInfo.getAgentChannelUuid();
+        String guestUuid = callInfo.getGuestChannelUuid();
+        String targetAgentUuid = IdUtil.getCallUuid();
+
+        log.info("🔀 [呼叫转接发起] CtrlUUID: {}, 原坐席: {}, 客户: {}, 目标分机: {}, 新坐席UUID: {}",
+                actualCtrlUuid, originalAgentUuid, guestUuid, targetExt, targetAgentUuid);
+
+        // 记录状态与上下文
+        callInfo.getData().put("isTransferring", "true");
+        callInfo.getData().put("originalAgentUuid", originalAgentUuid);
+        callInfo.getData().put("transferTargetExt", targetExt);
+        callInfo.getData().put("transferTargetAgentUuid", targetAgentUuid);
+
+        // 1. 挂断原坐席话道 (让客户留在 park 静默/回铃等待)
+        if (originalAgentUuid != null && !originalAgentUuid.trim().isEmpty()) {
+            fccClient.hangup(actualCtrlUuid, originalAgentUuid, "NORMAL_CLEARING");
+        }
+
+        // 2. 绑定新坐席话道到当前 ctrlUuid
+        sessionManager.bindChannel(targetAgentUuid, actualCtrlUuid);
+
+        // 3. 构建呼叫目标分机参数
+        Map<String, String> channelVars = new HashMap<>();
+        channelVars.put("hangup_after_bridge", "false");
+        channelVars.put("park_after_bridge", "true");
+        channelVars.put("absolute_codec_string", "PCMU,PCMA");
+        channelVars.put("liberal_dtmf", "true");
+
+        String dialStr = targetExt.contains("/") ? targetExt : "user/" + targetExt;
+        FNodeDialDTO.CallParam callParam = FNodeDialDTO.CallParam.builder()
+                .dialString(dialStr)
+                .cidName("TransferCall")
+                .cidNumber(callInfo.getCallerNumber() != null ? callInfo.getCallerNumber() : "Transfer")
+                .uuid(targetAgentUuid)
+                .params(channelVars)
+                .build();
+
+        FNodeDialDTO dialDTO = FNodeDialDTO.builder()
+                .ctrlUuid(actualCtrlUuid)
+                .uuid(targetAgentUuid)
+                .destination(FNodeDialDTO.Destination.builder()
+                        .callParams(Collections.singletonList(callParam))
+                        .build())
+                .timeout(30)
+                .build();
+
+        fccClient.dial(dialDTO);
+
+        // 4. 记录审计日志
+        handlersManager.recordAudit(callInfo, "transfer-initiated", "TRANSFER", Map.of(
+                "result", "INITIATED",
+                "originalAgent", originalAgentUuid != null ? originalAgentUuid : "",
+                "targetExt", targetExt,
+                "targetAgentUuid", targetAgentUuid,
+                "detail", "坐席工作台触发呼叫转接至目标分机: " + targetExt
+        ));
+
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("code", 200);
+        resp.put("message", "呼叫转接已成功发起");
+        resp.put("ctrlUuid", actualCtrlUuid);
+        resp.put("originalAgentUuid", originalAgentUuid);
+        resp.put("guestChannelUuid", guestUuid);
+        resp.put("targetExt", targetExt);
+        resp.put("targetAgentUuid", targetAgentUuid);
         return resp;
     }
 }

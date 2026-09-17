@@ -20,6 +20,7 @@ public class FNodeReadDTMFDTO implements Serializable {
     private Integer minDigits;
     @JSONField(name = "max_digits")
     private Integer maxDigits;
+    private Integer tries;
     private Integer timeout;
     @JSONField(name = "digit_timeout")
     private Integer digitTimeout;

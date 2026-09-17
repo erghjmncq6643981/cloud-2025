@@ -172,6 +172,41 @@ public class FccEventListener {
     }
 
     private void handleChannelReady(CallInfoBO callInfo, String uuid) {
+        // 1. 优先检查是否为呼叫转接的目标坐席 Leg 应答 (Transfer Target Agent READY)
+        String transferTargetUuid = callInfo.getData() != null ? callInfo.getData().get("transferTargetAgentUuid") : null;
+        if (transferTargetUuid != null && transferTargetUuid.equals(uuid)) {
+            callInfo.getData().remove("transferTargetAgentUuid");
+            callInfo.getData().remove("isTransferring");
+            callInfo.setAgentChannelUuid(uuid);
+            callInfo.getData().put("agentChannelUuid", uuid);
+
+            log.info("🔗 [呼叫转接协同] 目标坐席 {} 已应答就绪，重新桥接客户话道 {} 与目标坐席！",
+                    uuid, callInfo.getGuestChannelUuid());
+
+            FlowNode bridgeNode = FlowNode.builder()
+                    .actionType(ActionType.CHANNEL_BRIDGE)
+                    .actionKey("bridge-transfer-target")
+                    .order(1)
+                    .data(new HashMap<>(Map.of(
+                            "uuidA", callInfo.getGuestChannelUuid(),
+                            "uuidB", uuid,
+                            "ctrlUuid", callInfo.getCtrlUuid() != null ? callInfo.getCtrlUuid() : ""
+                    )))
+                    .build();
+            handlersManager.publish(callInfo, bridgeNode);
+
+            String targetExt = callInfo.getData().getOrDefault("transferTargetExt", "unknown");
+            String origAgent = callInfo.getData().getOrDefault("originalAgentUuid", "unknown");
+            handlersManager.recordAudit(callInfo, "call-transferred", "TRANSFER", Map.of(
+                    "result", "SUCCESS",
+                    "fromAgent", origAgent,
+                    "toAgent", uuid,
+                    "targetExt", targetExt,
+                    "detail", "呼叫成功转接至目标坐席: " + targetExt + " (话道重新桥接对讲)"
+            ));
+            return;
+        }
+
         String modelKey = callInfo.getModelKey() != null ? callInfo.getModelKey() : FlowModelType.INBOUND_CUSTOMER_SERVICE.name();
 
         if (FlowModelType.OUTBOUND_TWO_WAY_CALL.name().equals(modelKey)) {
@@ -200,6 +235,16 @@ public class FccEventListener {
                             )))
                             .build();
                     handlersManager.publish(callInfo, bridgeNode);
+                }
+            }
+        } else if (FlowModelType.AUTO_DIAL_NOTIFICATION.name().equals(modelKey)) {
+            // 自动外呼通知场景 (AUTO_DIAL_NOTIFICATION):
+            // 客户接听后话道就绪 (Guest READY) -> 触发 ROUTE 阶段 (播放通知语音并收号确认)
+            if (uuid.equals(callInfo.getGuestChannelUuid())) {
+                if (callInfo.getData().putIfAbsent("notifyStarted", "true") == null) {
+                    callInfo.setStageState(CallStageState.ROUTE);
+                    log.info("📢 [自动通知协同] 客户已接听话道就绪，触发通知放音收号: Guest={}", uuid);
+                    publisher.publishEvent(new CallRouteEvent(callInfo));
                 }
             }
         } else {
@@ -235,6 +280,13 @@ public class FccEventListener {
 
     private void handleChannelDestroy(CallInfoBO callInfo, String uuid, String ctrlUuid, JSONObject eventParams) {
         String hungupUuid = uuid;
+
+        // 呼叫转接保护：若正在转接且挂机的是原坐席话道，静默忽略，避免触发 CallEndEvent 导致客户过早进入满意度评价或挂机
+        if ("true".equals(callInfo.getData().get("isTransferring")) && hungupUuid.equals(callInfo.getData().get("originalAgentUuid"))) {
+            log.info("🔀 [呼叫转接协同] 原坐席话道 {} 已挂断退出，客户话道驻留等待目标坐席应答", hungupUuid);
+            return;
+        }
+
         if (uuid.equals(callInfo.getAgentChannelUuid())) callInfo.getData().put("agentEnded", "true");
         if (uuid.equals(callInfo.getGuestChannelUuid())) callInfo.getData().put("guestEnded", "true");
 
@@ -333,8 +385,27 @@ public class FccEventListener {
                         return;
                     }
 
-                    // 场景 B: 满意度评价按键
-                    if (session.getData().putIfAbsent("surveyScore", digit) == null) {
+                    // 场景 B: 自动外呼通知流程中的按键意图确认
+                    if (FlowModelType.AUTO_DIAL_NOTIFICATION.name().equals(modelKey)) {
+                        if (session.getData().putIfAbsent("notifyDigit", digit) == null) {
+                            String intentDesc = "1".equals(digit) ? "确认办理" : ("2".equals(digit) ? "咨询详情" : "其他业务");
+                            handlersManager.recordAudit(session, "notification-confirmed", "READ_DTMF", Map.of(
+                                    "digit", digit,
+                                    "result", "SUCCESS",
+                                    "detail", "客户按键确认意向: " + digit + " (" + intentDesc + ")",
+                                    "durationMs", String.valueOf(durationMs),
+                                    "targetUuid", uuid
+                            ));
+                            log.info("📢 [自动通知按键确认] 客户按键确认意向: {} ({}), Channel={}", digit, intentDesc, uuid);
+                        }
+                        return;
+                    }
+
+                    // 场景 C: 满意度评价按键 (仅在坐席已挂机或已进入服务评价阶段时触发)
+                    boolean canSurvey = "true".equals(session.getData().get("callEndFired"))
+                            || "true".equals(session.getData().get("agentEnded"))
+                            || session.getStageState() == CallStageState.NORMAL_END;
+                    if (canSurvey && session.getData().putIfAbsent("surveyScore", digit) == null) {
                         handlersManager.recordAudit(session, "survey-score-recorded", "READ_DTMF", Map.of(
                                 "score", digit,
                                 "digit", digit,

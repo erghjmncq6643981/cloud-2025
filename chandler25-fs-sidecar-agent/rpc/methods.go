@@ -188,6 +188,12 @@ func (d *Dispatcher) handleFNodeBridge(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required params: uuid, peer_uuid", nil)
 	}
 
+	// 确保双方话道在解除桥接后不会被 FreeSWITCH 自动销毁，而是返回静默驻留 (&park) 等待后续业务（如满意度评价）
+	d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s hangup_after_bridge false", uuidA))
+	d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s park_after_bridge true", uuidA))
+	d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s hangup_after_bridge false", uuidB))
+	d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s park_after_bridge true", uuidB))
+
 	args := fmt.Sprintf("%s %s", uuidA, uuidB)
 	res, err := d.esl.ExecuteAPI("uuid_bridge", args)
 	if err != nil {
@@ -208,7 +214,8 @@ type FNodeReadDTMFParams struct {
 	Media        MediaInfo `json:"media"`
 	MinDigits    int       `json:"min_digits"`
 	MaxDigits    int       `json:"max_digits"`
-	Timeout      int       `json:"timeout"`       // 毫秒
+	Tries        int       `json:"tries"`
+	Timeout      int       `json:"timeout"`       // 毫秒 (未按键时等待时长及重播间隔)
 	DigitTimeout int       `json:"digit_timeout"` // 毫秒
 	Terminators  string    `json:"terminators"`
 	AudioFile    string    `json:"audio_file"` // 兼容直接传文件
@@ -258,16 +265,19 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 		audioSrc = "silence_stream://250"
 	}
 
-	tries := 2
+	tries := p.Tries
+	if tries <= 0 {
+		tries = 2
+	}
 	timeout := p.Timeout
 	if timeout <= 0 {
-		timeout = 3000
+		timeout = 2000
 	}
 	digitTimeout := p.DigitTimeout
 	if digitTimeout <= 0 {
-		digitTimeout = 3000
+		digitTimeout = 2000
 	}
-	intervalSilence := "silence_stream://3000"
+	intervalSilence := fmt.Sprintf("silence_stream://%d", timeout)
 
 	actionAfter := strings.ToLower(p.ActionAfter)
 	if actionAfter == "" {
@@ -277,7 +287,7 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 	var inlineApp string
 	if actionAfter == "park" {
 		// 导航收号等中间流程：收号完成/超时后转入 park 驻留，等待后续路由桥接
-		inlineApp = fmt.Sprintf("start_dtmf,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,park",
+		inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,park",
 			p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
 	} else {
 		// 满意度评价等收尾流程：支持播报致谢语并挂机
@@ -290,10 +300,10 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 		}
 
 		if thankYouAudio != "" {
-			inlineApp = fmt.Sprintf("start_dtmf,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",
+			inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",
 				p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout, thankYouAudio)
 		} else {
-			inlineApp = fmt.Sprintf("start_dtmf,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,hangup:NORMAL_CLEARING",
+			inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,hangup:NORMAL_CLEARING",
 				p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
 		}
 	}
