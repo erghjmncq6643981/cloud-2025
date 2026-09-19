@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS fs_gateway (
     register            BOOLEAN DEFAULT TRUE,
     expire_seconds      INT DEFAULT 3600,
     ping_seconds        INT DEFAULT 25,
-    status              VARCHAR(32) DEFAULT 'REGED',
-    ping_ms             VARCHAR(32) DEFAULT '12ms',
+    status              VARCHAR(32) DEFAULT 'UNKNOWN',
+    ping_ms             VARCHAR(32) DEFAULT '',
     is_enabled          BOOLEAN DEFAULT TRUE,
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS fs_cdr (
     read_codec              VARCHAR(32) DEFAULT 'PCMA',
     write_codec             VARCHAR(32) DEFAULT 'PCMA',
     sip_user_agent          VARCHAR(128) DEFAULT '',
-    quality_percentage      VARCHAR(16) DEFAULT '100.0',
+    quality_percentage      VARCHAR(16) DEFAULT '',
     variables_json          JSONB DEFAULT '{}'::jsonb,
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

@@ -105,16 +105,14 @@ export interface Gateway {
   register?: boolean
   expire_seconds?: number
   ping_seconds?: number
-  status: string
-  ping_ms: string
+  status?: string
+  ping_ms?: string
 }
 
 export interface ExtensionItem {
   extension: string
-  password: string
   context: string
   callgroup: string
-  xml_path: string
   is_registered: boolean
   network_ip: string
   network_port: string
@@ -159,19 +157,18 @@ export const telephonyApi = {
     const isEslAlive = raw.esl_connected ?? raw.fs_alive ?? false
     return {
       fs_alive: isEslAlive,
-      pg_connected: raw.pg_connected ?? isEslAlive,
-      uptime: raw.uptime || '0s',
-      version: raw.sidecar_version || 'v1.11.3',
+      pg_connected: raw.pg_connected === true,
+      uptime: raw.uptime || '',
+      version: raw.free_switch_version || '',
       total_sessions: Number(raw.total_sessions) || 0,
       active_sessions: raw.active_calls ?? 0,
-      max_sessions: 1000,
+      max_sessions: Number(raw.max_channels) || 0,
       cps: Number(raw.current_cps) || 0,
       registrations: raw.registrations ?? 0,
       channels: raw.active_channels ?? raw.channels ?? 0,
       calls: raw.active_calls ?? raw.calls ?? 0,
-      node_id: raw.node_id || 'node-01',
-      node_state: isEslAlive ? 'ACTIVE' : 'OFFLINE',
-      ...raw
+      node_id: raw.node_id || '',
+      node_state: raw.node_state || ''
     }
   },
 
@@ -248,6 +245,18 @@ export const telephonyApi = {
     return res.data.output || ''
   },
 
+  async dialEcho(extension: string): Promise<string> {
+    assertDialTarget(extension)
+    return this.executeCli(`originate user/${extension} &echo`)
+  },
+
+  async bridgeExtensions(caller: string, callee: string): Promise<string> {
+    assertDialTarget(caller)
+    assertDialTarget(callee)
+    if (caller === callee) throw new Error('主叫与被叫不能相同')
+    return this.executeCli(`originate user/${callee} &bridge(user/${caller})`)
+  },
+
   async createExtension(data: { extension: string; password: string; context?: string; callgroup?: string; endpoint_type?: string; description?: string }): Promise<any> {
     const res = await client.post('/telephony/extensions', data)
     return res.data
@@ -255,5 +264,11 @@ export const telephonyApi = {
 
   async reloadXml(): Promise<string> {
     return this.executeCli('reloadxml')
+  }
+}
+
+function assertDialTarget(value: string): void {
+  if (!/^[0-9A-Za-z_.-]{1,32}$/.test(value)) {
+    throw new Error('分机标识格式不合法')
   }
 }

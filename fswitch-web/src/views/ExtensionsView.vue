@@ -107,12 +107,16 @@
       </div>
     </div>
 
+    <div v-if="loadError" class="mx-6 mt-4 rounded-lg border border-rose-800/60 bg-rose-950/30 px-4 py-3 text-sm text-rose-300">
+      {{ loadError }}
+    </div>
+
     <!-- 全量分机高密度数据表 -->
     <div class="flex-1 p-6 overflow-hidden flex flex-col space-y-4">
       <div class="flex items-center justify-between text-base text-slate-300 px-1 font-medium">
         <div>
           共检索到 <b class="text-cyan-400 font-mono text-xl font-black">{{ filteredExtensions.length }}</b> 个分机账户
-          <span class="text-slate-500 text-sm ml-2">（支持查看/修改密码，实时关联 FreeSWITCH XML 与 PG 注册态）</span>
+          <span class="text-slate-500 text-sm ml-2">（配置来自 PostgreSQL，注册态来自 FreeSWITCH）</span>
         </div>
         <div class="flex items-center gap-4 text-sm font-mono">
           <span class="flex items-center gap-1.5 text-emerald-400"><span class="w-2 h-2 rounded-full bg-emerald-400"></span>已注册: {{ registeredCount }}</span>
@@ -126,7 +130,6 @@
             <tr>
               <th class="py-4 px-6 w-28">分机号</th>
               <th class="py-4 px-6 w-52">注册状态</th>
-              <th class="py-4 px-6 w-64">SIP 认证密码</th>
               <th class="py-4 px-6 min-w-[220px]">网络终端 (User-Agent)</th>
               <th class="py-4 px-6 w-60">网络地址 (IP:Port)</th>
               <th class="py-4 px-6 w-44">Context / 呼叫组</th>
@@ -158,44 +161,12 @@
                 </span>
               </td>
 
-              <!-- SIP 认证密码 (支持查看与明密文切换) -->
-              <td class="py-4 px-6">
-                <div class="flex items-center gap-2.5 font-mono">
-                  <span class="text-base font-bold" :class="revealedPasswords[ext.extension] ? 'text-amber-300' : 'text-slate-400'">
-                    {{ revealedPasswords[ext.extension] ? ext.password : '••••••••' }}
-                  </span>
-                  <!-- 密码显隐切换按钮 -->
-                  <button 
-                    @click="togglePassword(ext.extension)"
-                    class="text-slate-400 hover:text-cyan-300 text-sm p-1 rounded hover:bg-slate-800 transition"
-                    :title="revealedPasswords[ext.extension] ? '隐藏密码' : '显示密码'"
-                  >
-                    <svg v-if="revealedPasswords[ext.extension]" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-                      <line x1="1" y1="1" x2="23" y2="23"/>
-                    </svg>
-                    <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                    </svg>
-                  </button>
-                  <!-- 快捷修改密码按钮 -->
-                  <button 
-                    @click="openEditPassword(ext)"
-                    class="text-xs bg-slate-800 hover:bg-cyan-950 border border-slate-700 hover:border-cyan-700 text-cyan-400 px-2 py-0.5 rounded font-sans font-medium transition"
-                  >
-                    修改
-                  </button>
-                </div>
-              </td>
-
-              <!-- 终端与 XML 路径 -->
+              <!-- 终端 -->
               <td class="py-4 px-6">
                 <div class="text-white font-bold text-base">
                   {{ ext.is_registered ? (ext.user_agent || 'SIP Terminal') : '等待话机接入' }}
                 </div>
-                <div class="text-xs text-slate-400 font-mono truncate max-w-xs pt-0.5">
-                  {{ ext.xml_path }}
-                </div>
+                <button @click="openEditPassword(ext)" class="pt-1 text-xs text-cyan-400 hover:underline">重置认证密码</button>
               </td>
 
               <!-- 网络地址 -->
@@ -230,7 +201,7 @@
               </td>
             </tr>
             <tr v-if="filteredExtensions.length === 0">
-              <td colspan="7" class="text-center py-16 text-slate-500 text-base font-medium">
+              <td colspan="6" class="text-center py-16 text-slate-500 text-base font-medium">
                 无匹配的分机账户记录
               </td>
             </tr>
@@ -325,20 +296,19 @@
         </div>
         <div class="px-6 space-y-4 text-sm">
           <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 text-xs text-slate-300 font-mono space-y-1">
-            <div>配置文件: <span class="text-cyan-300">{{ editingExt.xml_path }}</span></div>
             <div>当前 Context: <span class="text-slate-200">{{ editingExt.context }}</span></div>
           </div>
           <div>
             <label class="block text-slate-400 mb-1.5 font-semibold">新 SIP 认证密码 (Password) *</label>
             <input 
               v-model="editPasswordInput" 
-              type="text" 
+              type="password"
               placeholder="输入新密码..." 
               class="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-4 py-2.5 outline-none font-mono text-base font-bold focus:border-cyan-500"
             >
           </div>
           <div class="text-xs text-slate-400 leading-relaxed bg-cyan-950/30 border border-cyan-900/50 p-3 rounded-xl">
-            💡 提示：提交后将调用底层脚本更新该分机 XML 配置，并自动触发 FreeSWITCH 毫秒级 <code class="text-cyan-300">reloadxml</code> 热重载，话机使用新密码重新注册即可生效，无需重启服务。
+            提交后 Sidecar 会更新分机配置并请求 FreeSWITCH 重新加载。最终注册结果以新的注册事件为准。
           </div>
         </div>
         <div class="bg-[#0F172A] border-t border-slate-800 px-6 py-3.5 flex justify-end gap-3">
@@ -362,7 +332,7 @@
           </div>
           <div>
             <label class="block text-slate-400 mb-1.5 font-medium">SIP 认证密码 (Password) *</label>
-            <input v-model="newExt.password" type="text" placeholder="设置认证密码..." class="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-3.5 py-2.5 outline-none font-mono text-sm focus:border-cyan-500">
+            <input v-model="newExt.password" type="password" autocomplete="new-password" placeholder="设置认证密码..." class="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-3.5 py-2.5 outline-none font-mono text-sm focus:border-cyan-500">
           </div>
           <div class="grid grid-cols-2 gap-3.5">
             <div>
@@ -398,8 +368,6 @@
             <div class="flex justify-between"><span class="text-slate-400">Contact URI:</span><span class="text-slate-400 truncate text-xs">{{ selectedExt.url || '-' }}</span></div>
           </div>
           <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-1.5 text-slate-300">
-            <div class="flex justify-between"><span class="text-slate-400">XML 配置路径:</span><span class="text-cyan-300 text-xs">{{ selectedExt.xml_path }}</span></div>
-            <div class="flex justify-between"><span class="text-slate-400">SIP 认证密码:</span><span class="text-amber-300 font-bold">{{ selectedExt.password }}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">呼叫 Context:</span><span>{{ selectedExt.context }}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">呼叫组:</span><span>{{ selectedExt.callgroup }}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Call-ID Token:</span><span class="text-slate-400 text-xs">{{ selectedExt.token || '-' }}</span></div>
@@ -416,12 +384,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import type { Registration, ExtensionItem } from '@/api/telephony'
+import type { ExtensionItem } from '@/api/telephony'
 import { telephonyApi } from '@/api/telephony'
-
-const props = defineProps<{
-  registrations: Registration[]
-}>()
 
 const emit = defineEmits<{
   (e: 'refresh'): void
@@ -453,7 +417,7 @@ const pageSize = ref(10)
 const jumpPageInput = ref('')
 
 const extensionList = ref<ExtensionItem[]>([])
-const revealedPasswords = ref<Record<string, boolean>>({})
+const loadError = ref('')
 
 function handleSearch() {
   appliedFilters.value = { ...queryForm.value }
@@ -479,9 +443,9 @@ const editPasswordInput = ref('')
 const showCreateModal = ref(false)
 const newExt = ref({
   extension: '',
-  password: '123',
-  context: 'default',
-  callgroup: 'default'
+  password: '',
+  context: '',
+  callgroup: ''
 })
 
 onMounted(() => {
@@ -492,24 +456,9 @@ async function loadExtensions() {
   try {
     const list = await telephonyApi.getAllExtensions()
     extensionList.value = list
-  } catch (err) {
-    // 降级使用传入的 registrations 生成基础列表
-    if (extensionList.value.length === 0 && props.registrations) {
-      extensionList.value = props.registrations.map(r => ({
-        extension: r.reg_user,
-        password: '1234',
-        context: 'default',
-        callgroup: 'default',
-        xml_path: `conf/directory/default/${r.reg_user}.xml`,
-        is_registered: true,
-        network_ip: r.network_ip,
-        network_port: r.network_port,
-        network_proto: r.network_proto,
-        user_agent: r.user_agent || 'SIP Terminal',
-        remaining_seconds: r.remaining_seconds,
-        ping_status: 'Reachable (0.0ms)',
-      }))
-    }
+    loadError.value = ''
+  } catch (err: any) {
+    loadError.value = `分机列表加载失败：${err.message || '连接异常'}`
   }
 }
 
@@ -615,17 +564,13 @@ function handleJumpPage() {
   }
 }
 
-function togglePassword(ext: string) {
-  revealedPasswords.value[ext] = !revealedPasswords.value[ext]
-}
-
 function openDetail(ext: ExtensionItem) {
   selectedExt.value = ext
 }
 
 function openEditPassword(ext: ExtensionItem) {
   editingExt.value = ext
-  editPasswordInput.value = ext.password
+  editPasswordInput.value = ''
 }
 
 async function submitUpdatePassword() {
@@ -636,11 +581,12 @@ async function submitUpdatePassword() {
     await telephonyApi.updateExtensionPassword({
       extension: extNum,
       password: newPwd,
-      context: editingExt.value.context || 'default',
-      callgroup: editingExt.value.callgroup || 'default'
+      context: editingExt.value.context || '',
+      callgroup: editingExt.value.callgroup || ''
     })
-    emit('toast', `分机 ${extNum} 密码修改成功，XML 已热重载生效！`)
+    emit('toast', `分机 ${extNum} 密码已更新，最终注册状态以 FreeSWITCH 事件为准`)
     editingExt.value = null
+    editPasswordInput.value = ''
     await loadExtensions()
     emit('refresh')
   } catch (err: any) {
@@ -656,8 +602,8 @@ async function submitCreateExt() {
   try {
     await telephonyApi.createExtension(newExt.value)
     showCreateModal.value = false
-    emit('toast', `分机 ${newExt.value.extension} 创建成功，XML 已加载`)
-    newExt.value.extension = ''
+    emit('toast', `分机 ${newExt.value.extension} 已创建，最终注册状态以 FreeSWITCH 事件为准`)
+    newExt.value = { extension: '', password: '', context: '', callgroup: '' }
     await loadExtensions()
     emit('refresh')
   } catch (err: any) {

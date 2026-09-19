@@ -20,7 +20,7 @@ var globalDB *DBClient
 // InitDB 初始化 PostgreSQL 数据库连接池
 func InitDB(dsn string) (*DBClient, error) {
 	if dsn == "" {
-		dsn = "postgres://postgres:123456@127.0.0.1:5432/freeswitch?sslmode=disable"
+		return nil, fmt.Errorf("PG_DSN 未配置")
 	}
 
 	db, err := sql.Open("postgres", dsn)

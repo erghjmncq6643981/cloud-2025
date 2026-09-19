@@ -2,7 +2,6 @@ package governance
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -10,7 +9,7 @@ type NodeState string
 
 const (
 	StateHealthy    NodeState = "HEALTHY"
-	StateDraining  NodeState = "DRAINING"
+	StateDraining   NodeState = "DRAINING"
 	StateOverloaded NodeState = "OVERLOADED"
 	StateOffline    NodeState = "OFFLINE"
 )
@@ -20,7 +19,9 @@ type NodeManager struct {
 	nodeID         string
 	maxChannels    int
 	state          NodeState
-	activeChannels int64
+	channels       map[string]bool
+	channelTimes   map[string]int64
+	healthy        bool
 	startTime      time.Time
 	mu             sync.RWMutex
 }
@@ -29,7 +30,9 @@ func NewNodeManager(nodeID string, maxChannels int) *NodeManager {
 	return &NodeManager{
 		nodeID:      nodeID,
 		maxChannels: maxChannels,
-		state:       StateHealthy,
+		state:       StateOffline,
+		channels:    make(map[string]bool),
+		channelTimes: make(map[string]int64),
 		startTime:   time.Now(),
 	}
 }
@@ -42,6 +45,7 @@ func (m *NodeManager) SetState(s NodeState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state = s
+	m.healthy = s == StateHealthy
 }
 
 func (m *NodeManager) GetState() NodeState {
@@ -52,27 +56,34 @@ func (m *NodeManager) GetState() NodeState {
 
 // Drain 开启呼叫沥干模式（停止接入新呼叫，等待存量自然挂机）
 func (m *NodeManager) Drain() {
-	m.SetState(StateDraining)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state = StateDraining
 }
 
 // Resume 恢复接单
 func (m *NodeManager) Resume() {
-	m.SetState(StateHealthy)
-}
-
-func (m *NodeManager) IncrementChannels() {
-	atomic.AddInt64(&m.activeChannels, 1)
-}
-
-func (m *NodeManager) DecrementChannels() {
-	current := atomic.AddInt64(&m.activeChannels, -1)
-	if current < 0 {
-		atomic.StoreInt64(&m.activeChannels, 0)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.healthy {
+		m.state = StateHealthy
+	} else {
+		m.state = StateOffline
 	}
 }
 
-func (m *NodeManager) SetActiveChannels(n int64) {
-	atomic.StoreInt64(&m.activeChannels, n)
+// ObserveHealth updates probe health without cancelling an operator's drain.
+func (m *NodeManager) ObserveHealth(alive bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.healthy = alive
+	if m.state != StateDraining {
+		if alive {
+			m.state = StateHealthy
+		} else {
+			m.state = StateOffline
+		}
+	}
 }
 
 // IsAcceptingCalls 检查当前是否允许接入新通话
@@ -80,11 +91,12 @@ func (m *NodeManager) IsAcceptingCalls() (bool, NodeState) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.state == StateDraining {
-		return false, StateDraining
+	// 仅健康节点可接新呼叫；离线、过载及未知状态一律拒绝。
+	if m.state != StateHealthy {
+		return false, m.state
 	}
 
-	active := atomic.LoadInt64(&m.activeChannels)
+	active := len(m.channels)
 	if active >= int64(m.maxChannels) {
 		return false, StateOverloaded
 	}
@@ -109,7 +121,7 @@ func (m *NodeManager) GetSnapshot() *NodeStatusSnapshot {
 	return &NodeStatusSnapshot{
 		NodeID:         m.nodeID,
 		State:          m.state,
-		ActiveChannels: atomic.LoadInt64(&m.activeChannels),
+		ActiveChannels: int64(len(m.channels)),
 		MaxChannels:    m.maxChannels,
 		UptimeSeconds:  int64(time.Since(m.startTime).Seconds()),
 		Timestamp:      time.Now().UnixMilli(),

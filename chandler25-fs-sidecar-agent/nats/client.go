@@ -69,7 +69,7 @@ func (c *Client) StartListeningRPC() error {
 	return nil
 }
 
-// PublishEvent 发布标准化 JSON-RPC 2.0 事件到 NATS (Event.Channel, Event.DTMF, Event.Record)
+// PublishEvent 发布标准化 JSON-RPC 2.0 事件到 NATS (Event.Channel, Event.DTMF, Event.Recording)
 func (c *Client) PublishEvent(normEvent *event.NormalizedEventResult) error {
 	if c.nc == nil || c.nc.IsClosed() {
 		return fmt.Errorf("NATS 连接已关闭")

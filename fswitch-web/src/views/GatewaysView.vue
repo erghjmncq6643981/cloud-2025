@@ -24,6 +24,9 @@
 
     <!-- 主体内容区 -->
     <div class="flex-1 p-6 overflow-y-auto space-y-5">
+      <div v-if="stale" class="rounded-lg border border-amber-700/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+        网关列表刷新失败，当前内容为最后一次成功快照。
+      </div>
       <!-- 运营商对接参数专家解读与规范指南 (可展开/折叠面板) -->
       <div v-if="showGuide" class="bg-[#131C31] border border-cyan-900/60 rounded-2xl p-5 shadow-xl space-y-4">
         <div class="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -106,13 +109,12 @@
               <!-- 网关标识 -->
               <td class="py-4 px-6">
                 <div class="font-bold text-cyan-400 text-lg">{{ gw.name }}</div>
-                <div class="text-xs text-slate-400 font-sans">Profile: {{ gw.profile || 'external' }}</div>
+                <div class="text-xs text-slate-400 font-sans">Profile: {{ gw.profile || '-' }}</div>
               </td>
 
               <!-- 远端代理 -->
               <td class="py-4 px-6">
                 <div class="text-slate-100 font-semibold">{{ gw.proxy }}</div>
-                <div class="text-xs text-slate-400 font-sans">Transport: UDP / 5060</div>
               </td>
 
               <!-- 对接模式 -->
@@ -133,14 +135,14 @@
 
               <!-- DTMF & 编解码 -->
               <td class="py-4 px-6 font-sans text-xs">
-                <div class="text-emerald-400 font-mono font-bold">{{ gw.dtmf_type || 'rfc2833' }}</div>
-                <div class="text-slate-400 truncate max-w-xs pt-0.5">{{ gw.codecs || 'PCMA, G729' }}</div>
+                <div class="text-emerald-400 font-mono font-bold">{{ gw.dtmf_type || '-' }}</div>
+                <div class="text-slate-400 truncate max-w-xs pt-0.5">{{ gw.codecs || '-' }}</div>
               </td>
 
               <!-- 路由 Context -->
               <td class="py-4 px-6 font-sans">
                 <span class="bg-indigo-950/60 border border-indigo-800 text-indigo-300 px-2.5 py-0.5 rounded text-xs font-mono font-semibold">
-                  {{ gw.context || 'public' }}
+                  {{ gw.context || '-' }}
                 </span>
               </td>
 
@@ -148,12 +150,12 @@
               <td class="py-4 px-6">
                 <div class="flex items-center gap-2">
                   <span 
-                    :class="gw.status === 'REGED' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : (gw.status === 'NOREG' ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30' : 'bg-rose-500/15 text-rose-400 border-rose-500/30')" 
+                    :class="isGatewayUp(gw.status) ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'"
                     class="border px-3 py-1 rounded-md text-xs font-extrabold font-mono"
                   >
-                    {{ gw.status === 'REGED' ? 'REGED (UP)' : (gw.status === 'NOREG' ? 'DIRECT (UP)' : 'DOWN') }}
+                    {{ gw.status || 'UNKNOWN' }}
                   </span>
-                  <span class="text-xs font-bold font-mono" :class="gw.status.includes('UP') || gw.status === 'REGED' || gw.status === 'NOREG' ? 'text-emerald-400' : 'text-slate-500'">
+                  <span v-if="gw.ping_ms" class="text-xs font-bold font-mono" :class="isGatewayUp(gw.status) ? 'text-emerald-400' : 'text-slate-500'">
                     {{ gw.ping_ms }}
                   </span>
                 </div>
@@ -168,6 +170,9 @@
             </tr>
           </tbody>
         </table>
+        <div v-if="gatewayList.length === 0" class="px-6 py-14 text-center text-sm text-slate-400">
+          {{ stale ? '当前无法确认网关配置' : '尚未配置网关' }}
+        </div>
       </div>
     </div>
 
@@ -243,7 +248,7 @@
               </div>
               <div>
                 <label class="block text-slate-400 mb-1 font-semibold text-xs">鉴权密码 (password)</label>
-                <input v-model="currentGw.password" type="password" placeholder="••••••••" class="w-full bg-slate-950 border border-slate-700 text-white rounded-lg px-3.5 py-2 font-mono text-sm outline-none">
+                <input v-model="currentGw.password" type="password" autocomplete="new-password" :placeholder="isEditing ? '留空则保留现有密码' : '输入鉴权密码'" class="w-full bg-slate-950 border border-slate-700 text-white rounded-lg px-3.5 py-2 font-mono text-sm outline-none">
               </div>
             </div>
             <div class="grid grid-cols-2 gap-4">
@@ -301,75 +306,56 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref } from 'vue'
 import type { Gateway } from '@/api/telephony'
 import { telephonyApi } from '@/api/telephony'
 
 const props = defineProps<{
   gateways: Gateway[]
+  stale: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'toast', msg: string): void
+  (e: 'refresh'): void
 }>()
 
 const showGuide = ref(true)
 const showModal = ref(false)
 const isEditing = ref(false)
 
-const gatewayList = ref<Gateway[]>([])
+const gatewayList = computed(() => props.gateways)
 
 const defaultGw: Gateway = {
-  name: 'trunk_unicom_sh02',
-  profile: 'external',
-  proxy: '112.65.10.99:5060',
-  username: 'unicom_sip_trunk_902',
-  password: 'Password@2026',
-  auth_user: 'unicom_sip_trunk_902',
-  from_user: 'unicom_sip_trunk_902',
-  from_domain: 'sip.sh.chinaunicom.cn',
-  caller_id_in_from: true,
-  context: 'public',
-  extension: 'auto_to_user',
-  dtmf_type: 'rfc2833',
-  codecs: 'PCMA, G729',
-  register: true,
-  expire_seconds: 3600,
-  ping_seconds: 25,
-  status: 'REGED',
-  ping_ms: '13ms'
+  name: '',
+  profile: '',
+  proxy: '',
+  username: '',
+  password: '',
+  auth_user: '',
+  from_user: '',
+  from_domain: '',
+  caller_id_in_from: false,
+  context: '',
+  extension: '',
+  dtmf_type: '',
+  codecs: '',
+  register: false,
+  expire_seconds: 0,
+  ping_seconds: 0
 }
 
 const currentGw = ref<Gateway>({ ...defaultGw })
 
-onMounted(async () => {
-  await loadGateways()
-})
-
-async function loadGateways() {
-  try {
-    const list = await telephonyApi.getGateways()
-    if (list && list.length > 0) {
-      gatewayList.value = list
-    } else if (props.gateways && props.gateways.length > 0) {
-      gatewayList.value = props.gateways
-    }
-  } catch (err) {
-    if (props.gateways && props.gateways.length > 0) {
-      gatewayList.value = props.gateways
-    }
-  }
-}
-
 function openAddModal() {
   isEditing.value = false
-  currentGw.value = { ...defaultGw, name: `trunk_carrier_${gatewayList.value.length + 1}` }
+  currentGw.value = { ...defaultGw }
   showModal.value = true
 }
 
 function openEditModal(gw: Gateway) {
   isEditing.value = true
-  currentGw.value = { ...gw }
+  currentGw.value = { ...gw, password: '' }
   showModal.value = true
 }
 
@@ -378,11 +364,15 @@ async function saveGateway() {
     emit('toast', '请完整填写网关标识和代理服务器地址')
     return
   }
+  if (!isEditing.value && currentGw.value.register && !currentGw.value.password) {
+    emit('toast', '注册型网关必须填写鉴权密码')
+    return
+  }
   try {
     await telephonyApi.saveGateway(currentGw.value)
-    emit('toast', `网关 ${currentGw.value.name} 已成功保存至 PostgreSQL 并热重载生效！`)
+    emit('toast', `网关 ${currentGw.value.name} 配置已保存，Sofia 重扫描指令已发送`)
     showModal.value = false
-    await loadGateways()
+    emit('refresh')
   } catch (err: any) {
     emit('toast', '保存网关异常: ' + (err.message || 'Error'))
   }
@@ -392,9 +382,8 @@ async function pingGateway(gw: Gateway) {
   emit('toast', `正在向网关 ${gw.name} (${gw.proxy}) 发送 SIP OPTIONS 探活心跳...`)
   try {
     const res = await telephonyApi.pingGateway(gw.name)
-    gw.status = res.status
-    gw.ping_ms = res.ping_ms
-    emit('toast', `网关 ${gw.name} 探活成功: ${res.status} (RTT: ${res.ping_ms})`)
+    emit('toast', `网关 ${gw.name} 探活指令已受理，链路状态尚未确认`)
+    emit('refresh')
   } catch (err: any) {
     emit('toast', `网关 ${gw.name} 探活超时或异常: ${err.message || 'Error'}`)
   }
@@ -405,11 +394,16 @@ async function deleteGateway(name: string) {
     try {
       await telephonyApi.deleteGateway(name)
       emit('toast', `网关 ${name} 已从 PostgreSQL 删除并完成卸载`)
-      await loadGateways()
+      emit('refresh')
     } catch (err: any) {
       emit('toast', `删除网关异常: ${err.message || 'Error'}`)
     }
   }
+}
+
+function isGatewayUp(status?: string) {
+  const normalized = status?.toUpperCase() || ''
+  return normalized === 'REGED' || normalized === 'UP'
 }
 </script>
 

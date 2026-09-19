@@ -59,7 +59,6 @@ func (d *Dispatcher) HandleRaw(data []byte) []byte {
 func (d *Dispatcher) registerMethods() {
 	// FNode 标准规范控制方法
 	d.handlers["FNode.Dial"] = d.handleFNodeDial
-	d.handlers["FNode.Bridge"] = d.handleFNodeBridge
 	d.handlers["FNode.ChannelBridge"] = d.handleFNodeBridge
 	d.handlers["FNode.ReadDTMF"] = d.handleFNodeReadDTMF
 	d.handlers["FNode.Play"] = d.handleFNodePlay
@@ -71,18 +70,5 @@ func (d *Dispatcher) registerMethods() {
 	d.handlers["FNode.Resume"] = d.handleFNodeResume
 	d.handlers["FNode.Status"] = d.handleFNodeStatus
 
-	// 兼容旧版调用
-	d.handlers["call.originate"] = d.handleFNodeDial
-	d.handlers["call.bridge"] = d.handleFNodeBridge
-	d.handlers["call.hangup"] = d.handleFNodeHangup
-	d.handlers["call.transfer"] = d.handleFNodeTransfer
-	d.handlers["call.playAndGetDigits"] = d.handleFNodeReadDTMF
-	d.handlers["call.recordStart"] = d.handleFNodeRecord
-	d.handlers["call.recordStop"] = d.handleFNodeRecord
-	d.handlers["node.drain"] = d.handleFNodeDrain
-	d.handlers["node.resume"] = d.handleFNodeResume
-	d.handlers["node.status"] = d.handleFNodeStatus
-	d.handlers["node.rawEsl"] = d.handleFNodeNativeAPI
-
-	log.Printf("🛠️ [RPC] 已成功注册 %d 个标准 JSON-RPC 2.0 控制方法 (FNode.* 与兼容方法)", len(d.handlers))
+	log.Printf("[RPC] 已注册 %d 个 FNode 标准控制方法", len(d.handlers))
 }

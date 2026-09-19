@@ -46,7 +46,7 @@ type DTMFEventParams struct {
 	Timestamp  int64  `json:"timestamp"`
 }
 
-// RecordEventParams 标准 Event.Record 参数
+// RecordEventParams 标准 Event.Recording 参数
 type RecordEventParams struct {
 	NodeID    string `json:"node_id"`
 	CtrlUUID  string `json:"ctrl_uuid,omitempty"`
@@ -240,9 +240,6 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 	// 提取业务控制会话 ID (ctrl_uuid)
 	ctrlUUID := raw["variable_ctrl_uuid"]
 	if ctrlUUID == "" {
-		ctrlUUID = raw["variable_my_biz_id"]
-	}
-	if ctrlUUID == "" {
 		ctrlUUID = raw["variable_sip_h_X-Ctrl-UUID"]
 	}
 
@@ -424,7 +421,7 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 		}
 		notif := StandardRpcNotification{
 			JSONRPC: "2.0",
-			Method:  "Event.Record",
+			Method:  "Event.Recording",
 			Params:  recParams,
 		}
 		data, _ := json.Marshal(notif)
@@ -450,7 +447,7 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 		}
 		notif := StandardRpcNotification{
 			JSONRPC: "2.0",
-			Method:  "Event.Record",
+			Method:  "Event.Recording",
 			Params:  recParams,
 		}
 		data, _ := json.Marshal(notif)
@@ -548,4 +545,3 @@ func generateID(prefix string) string {
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%s-%x", prefix, b)
 }
-

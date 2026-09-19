@@ -7,16 +7,16 @@ import (
 
 // Registration 对应 FreeSWITCH registrations 原生表
 type Registration struct {
-	RegUser          string `json:"reg_user"`
-	Realm            string `json:"realm"`
-	Token            string `json:"token"`
-	URL              string `json:"url"`
-	Expires          int64  `json:"expires"`
-	NetworkIP        string `json:"network_ip"`
-	NetworkPort      string `json:"network_port"`
-	NetworkProto     string `json:"network_proto"`
-	Hostname         string `json:"hostname"`
-	Metadata         string `json:"metadata"`
+	RegUser      string `json:"reg_user"`
+	Realm        string `json:"realm"`
+	Token        string `json:"token"`
+	URL          string `json:"url"`
+	Expires      int64  `json:"expires"`
+	NetworkIP    string `json:"network_ip"`
+	NetworkPort  string `json:"network_port"`
+	NetworkProto string `json:"network_proto"`
+	Hostname     string `json:"hostname"`
+	Metadata     string `json:"metadata"`
 	// 增强扩展计算字段
 	UserAgent        string `json:"user_agent,omitempty"`
 	Status           string `json:"status,omitempty"`
@@ -67,7 +67,7 @@ type Call struct {
 type FsExtension struct {
 	ID                int64     `json:"id"`
 	Extension         string    `json:"extension"`
-	Password          string    `json:"password"`
+	Password          string    `json:"-"`
 	Context           string    `json:"context"`
 	Callgroup         string    `json:"callgroup"`
 	EffectiveCallerID string    `json:"effective_caller_id"`
@@ -82,13 +82,13 @@ type FsExtension struct {
 type ExtensionDetail struct {
 	ID               int64  `json:"id"`
 	Extension        string `json:"extension"`
-	Password         string `json:"password"`
+	Password         string `json:"-"`
 	Context          string `json:"context"`
 	Callgroup        string `json:"callgroup"`
 	EndpointType     string `json:"endpoint_type"`
 	IsEnabled        bool   `json:"is_enabled"`
 	Description      string `json:"description"`
-	XmlPath          string `json:"xml_path"`
+	XmlPath          string `json:"-"`
 	IsRegistered     bool   `json:"is_registered"`
 	NetworkIP        string `json:"network_ip"`
 	NetworkPort      string `json:"network_port"`
@@ -110,7 +110,7 @@ type Gateway struct {
 	Profile        string    `json:"profile"`           // 宿主 Profile，默认 external
 	Proxy          string    `json:"proxy"`             // 远端 SBC/代理地址:端口
 	Username       string    `json:"username"`          // 运营商 SIP 账号
-	Password       string    `json:"password"`          // 鉴权密码
+	Password       string    `json:"-"`                 // 仅供持久化与 XML 写入使用
 	AuthUser       string    `json:"auth_user"`         // 鉴权用户名
 	FromUser       string    `json:"from_user"`         // From 账号
 	FromDomain     string    `json:"from_domain"`       // From 域名
@@ -131,24 +131,24 @@ type Gateway struct {
 
 // FsCdr 软交换底层呼叫详细记录 (PostgreSQL fs_cdr 表)
 type FsCdr struct {
-	ID                     int64           `json:"id"`
-	CallUUID               string          `json:"call_uuid"`
-	CallerIDName           string          `json:"caller_id_name"`
-	CallerIDNumber         string          `json:"caller_id_number"`
-	DestinationNumber      string          `json:"destination_number"`
-	Context                string          `json:"context"`
-	StartEpoch             int64           `json:"start_epoch"`
-	AnswerEpoch            int64           `json:"answer_epoch"`
-	EndEpoch               int64           `json:"end_epoch"`
-	Duration               int             `json:"duration"`
-	Billsec                int             `json:"billsec"`
-	HangupCause            string          `json:"hangup_cause"`
-	SipHangupDisposition   string          `json:"sip_hangup_disposition"`
-	Direction              string          `json:"direction"`
-	ReadCodec              string          `json:"read_codec"`
-	WriteCodec             string          `json:"write_codec"`
-	SipUserAgent           string          `json:"sip_user_agent"`
-	QualityPercentage      string          `json:"quality_percentage"`
-	VariablesJSON          json.RawMessage `json:"variables_json"`
-	CreatedAt              string          `json:"created_at"`
+	ID                   int64           `json:"id"`
+	CallUUID             string          `json:"call_uuid"`
+	CallerIDName         string          `json:"caller_id_name"`
+	CallerIDNumber       string          `json:"caller_id_number"`
+	DestinationNumber    string          `json:"destination_number"`
+	Context              string          `json:"context"`
+	StartEpoch           int64           `json:"start_epoch"`
+	AnswerEpoch          int64           `json:"answer_epoch"`
+	EndEpoch             int64           `json:"end_epoch"`
+	Duration             int             `json:"duration"`
+	Billsec              int             `json:"billsec"`
+	HangupCause          string          `json:"hangup_cause"`
+	SipHangupDisposition string          `json:"sip_hangup_disposition"`
+	Direction            string          `json:"direction"`
+	ReadCodec            string          `json:"read_codec"`
+	WriteCodec           string          `json:"write_codec"`
+	SipUserAgent         string          `json:"sip_user_agent"`
+	QualityPercentage    string          `json:"quality_percentage"`
+	VariablesJSON        json.RawMessage `json:"variables_json"`
+	CreatedAt            string          `json:"created_at"`
 }

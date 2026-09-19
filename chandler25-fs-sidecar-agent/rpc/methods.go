@@ -157,7 +157,7 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), uuid, p.CtrlUUID, 200, "OK")
 }
 
-// --- 2. FNode.ChannelBridge / FNode.Bridge (话道桥接) ---
+// --- 2. FNode.ChannelBridge (话道桥接) ---
 type FNodeBridgeParams struct {
 	CtrlUUID       string `json:"ctrl_uuid"`
 	UUID           string `json:"uuid"`

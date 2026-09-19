@@ -49,10 +49,11 @@ func (h *TelephonyHandler) HandleStatus(w http.ResponseWriter, r *http.Request) 
 		rawStatus = "FreeSWITCH ESL 连接中断: " + err.Error()
 	}
 
-	regCount, chCount, callCount, _ := h.repo.GetSummaryCounts()
+	regCount, chCount, callCount, summaryErr := h.repo.GetSummaryCounts()
+	pgConnected := summaryErr == nil && h.repo.Healthy()
 
 	// 解析 status 文本中的关键指标
-	uptimeStr := "运行中"
+	uptimeStr := ""
 	sessionsStr := fmt.Sprintf("%d", chCount)
 	cpsStr := "0.0"
 
@@ -74,22 +75,24 @@ func (h *TelephonyHandler) HandleStatus(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	snapshot := h.gov.GetSnapshot()
 	statusData := map[string]interface{}{
-		"node_id":          h.gov.NodeID(),
-		"esl_connected":    err == nil,
-		"fs_alive":         err == nil,
-		"pg_connected":     err == nil,
-		"channels":         chCount,
-		"active_channels":  chCount,
-		"calls":            callCount,
-		"active_calls":     callCount,
-		"registrations":    regCount,
-		"uptime":           uptimeStr,
-		"total_sessions":   sessionsStr,
-		"cps":              cpsStr,
-		"current_cps":      cpsStr,
-		"raw_status":       stripANSI(rawStatus),
-		"sidecar_version":  "v2.1.0-pg-native",
+		"node_state":      snapshot.State,
+		"max_channels":    snapshot.MaxChannels,
+		"node_id":         h.gov.NodeID(),
+		"esl_connected":   err == nil,
+		"fs_alive":        err == nil,
+		"pg_connected":    pgConnected,
+		"channels":        chCount,
+		"active_channels": chCount,
+		"calls":           callCount,
+		"active_calls":    callCount,
+		"registrations":   regCount,
+		"uptime":          uptimeStr,
+		"total_sessions":  sessionsStr,
+		"cps":             cpsStr,
+		"current_cps":     cpsStr,
+		"raw_status":      stripANSI(rawStatus),
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -466,40 +469,34 @@ func (h *TelephonyHandler) HandleSofiaProfiles(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
-	internalRaw, _ := h.eslClient.ExecuteAPI("sofia", "status profile internal")
-	externalRaw, _ := h.eslClient.ExecuteAPI("sofia", "status profile external")
-
-	localIP, _ := h.eslClient.ExecuteAPI("global_getvar", "local_ip_v4")
-	localIP = strings.TrimSpace(localIP)
-	if localIP == "" || strings.HasPrefix(localIP, "-ERR") {
-		localIP = "127.0.0.1"
+	profiles := make([]map[string]interface{}, 0, 2)
+	for _, name := range []string{"internal", "external"} {
+		raw, err := h.eslClient.ExecuteAPI("sofia", "status profile "+name)
+		if err != nil || strings.Contains(strings.ToLower(raw), "invalid profile") || strings.HasPrefix(strings.TrimSpace(raw), "-ERR") {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "error": "Sofia Profile 查询失败"})
+			return
+		}
+		profile := map[string]interface{}{"name": name, "state": "UNKNOWN", "raw_lines": strings.Split(stripANSI(raw), "\n")}
+		for _, line := range strings.Split(raw, "\n") {
+			parts := strings.Fields(line)
+			if len(parts) < 2 {
+				continue
+			}
+			value := strings.Join(parts[1:], " ")
+			switch parts[0] {
+			case "SIP-IP":
+				profile["bind_ip"] = value
+			case "DIALPLAN":
+				profile["dialplan"] = value
+			case "CONTEXT":
+				profile["context"] = value
+			case "CODECS-IN":
+				profile["codecs"] = value
+			}
+		}
+		profiles = append(profiles, profile)
 	}
-
-	profiles := []map[string]interface{}{
-		{
-			"name":      "internal",
-			"state":     "RUNNING",
-			"sip_port":  5060,
-			"ws_port":   5066,
-			"wss_port":  7443,
-			"bind_ip":   localIP,
-			"dialplan":  "XML",
-			"context":   "default",
-			"codecs":    "OPUS, G722, PCMU, PCMA",
-			"raw_lines": strings.Split(stripANSI(internalRaw), "\n"),
-		},
-		{
-			"name":      "external",
-			"state":     "RUNNING",
-			"sip_port":  5080,
-			"bind_ip":   localIP,
-			"dialplan":  "XML",
-			"context":   "public",
-			"codecs":    "PCMA, PCMU, G729",
-			"raw_lines": strings.Split(stripANSI(externalRaw), "\n"),
-		},
-	}
-
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    200,
 		"message": "success",
@@ -532,30 +529,44 @@ func (h *TelephonyHandler) HandleGateways(w http.ResponseWriter, r *http.Request
 		})
 
 	case http.MethodPost:
-		var gw db.Gateway
-		if err := json.NewDecoder(r.Body).Decode(&gw); err != nil || gw.Name == "" || gw.Proxy == "" {
+		var req struct {
+			db.Gateway
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Proxy == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "error": "name and proxy are required"})
 			return
 		}
 
 		// 1. 落库 PostgreSQL
-		if err := h.repo.SaveGateway(gw); err != nil {
+		gw := req.Gateway
+		gw.Password = req.Password
+		if err := h.repo.SaveGateway(&gw); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "PG 保存失败: " + err.Error()})
 			return
 		}
 
 		// 2. 写入/更新 FreeSWITCH sip_profiles/external/{name}.xml
-		_ = writeGatewayXml(gw)
+		if err := writeGatewayXml(gw); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "配置已保存，但 XML 写入失败"})
+			return
+		}
 
 		// 3. 触发 Sofia External 热重载
-		rescanReply, _ := h.eslClient.ExecuteAPI("sofia", "profile external rescan")
+		rescanReply, rescanErr := h.eslClient.ExecuteAPI("sofia", "profile external rescan")
+		if rescanErr != nil || strings.HasPrefix(strings.TrimSpace(rescanReply), "-ERR") {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "error": "配置已保存，但 Sofia 重扫描失败"})
+			return
+		}
 
 		log.Printf("✅ [HTTP] 网关 %s 配置已持久化至 PostgreSQL 并触发 Sofia Rescan", gw.Name)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
-			"message": fmt.Sprintf("网关 %s 配置已保存至 PostgreSQL 并热重载生效", gw.Name),
+			"message": fmt.Sprintf("网关 %s 配置已保存，Sofia 重扫描已受理", gw.Name),
 			"rescan":  rescanReply,
 			"data":    gw,
 		})
@@ -615,17 +626,18 @@ func (h *TelephonyHandler) HandlePingGateway(w http.ResponseWriter, r *http.Requ
 	reply, err := h.eslClient.ExecuteAPI("sofia", fmt.Sprintf("profile external ping %s", req.Name))
 	latency := time.Since(start).Milliseconds()
 
-	status := "UP"
-	if err != nil || strings.Contains(strings.ToLower(reply), "down") || strings.Contains(strings.ToLower(reply), "error") {
-		status = "DOWN"
+	if err != nil || strings.HasPrefix(strings.TrimSpace(reply), "-ERR") || strings.Contains(strings.ToLower(reply), "error") {
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "error": "网关探活指令失败"})
+		return
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"code":    200,
-		"gateway": req.Name,
-		"status":  status,
-		"ping_ms": fmt.Sprintf("%dms", latency),
-		"reply":   reply,
+		"code":                200,
+		"gateway":             req.Name,
+		"status":              "UNKNOWN",
+		"command_duration_ms": latency,
+		"reply":               reply,
 	})
 }
 

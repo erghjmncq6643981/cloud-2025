@@ -227,13 +227,19 @@ func (s *Server) handleExtensions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	fsAlive := s.eslClient.Ping()
+	pgConnected := s.repo != nil && s.repo.Healthy()
 	snap := s.gov.GetSnapshot()
+	status := "UP"
+	if !fsAlive || !pgConnected {
+		status = "DEGRADED"
+	}
 
 	resp := map[string]interface{}{
-		"status":          "UP",
+		"status":          status,
 		"node_id":         s.cfg.NodeID,
 		"state":           string(snap.State),
 		"fs_alive":        fsAlive,
+		"pg_connected":    pgConnected,
 		"active_channels": snap.ActiveChannels,
 		"max_channels":    snap.MaxChannels,
 	}

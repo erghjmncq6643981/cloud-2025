@@ -1,174 +1,102 @@
-# FreeSWITCH Go Sidecar Agent (Telephony Pod Gateway)
+# chandler25-fs-sidecar-agent
 
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://golang.org)
-[![NATS](https://img.shields.io/badge/NATS-2.10+-27AAE1?style=flat&logo=nats.io)](https://nats.io)
-[![JSON-RPC](https://img.shields.io/badge/JSON--RPC-2.0-blue?style=flat)](https://www.jsonrpc.org/specification)
-[![FreeSWITCH](https://img.shields.io/badge/FreeSWITCH-1.10+-orange?style=flat)](https://freeswitch.org)
+FreeSWITCH node-side gateway implemented in Go. One Sidecar is deployed with one FreeSWITCH node and exposes a stable FCC boundary to Java control-plane services and the FreeSWITCH operations console.
 
-## 📖 项目简介
+## Responsibilities
 
-`chandler25-fs-sidecar-agent` 是面向**云原生与集群化部署**设计的高性能软交换守护网关（Telephony Pod Sidecar）。
+- Maintain the local inbound ESL connection to FreeSWITCH.
+- Normalize selected FreeSWITCH events into FCC JSON-RPC notifications.
+- Subscribe to node-scoped NATS request/reply commands.
+- Publish node heartbeat and capacity state.
+- Enforce basic node state such as `HEALTHY`, `OFFLINE`, and `DRAINING`.
+- Expose HTTP/WebSocket operations endpoints on `8088`.
+- Read FreeSWITCH runtime tables and maintain Sidecar extension/gateway/CDR metadata in PostgreSQL.
+- Execute extension lifecycle scripts and selected ESL administration commands.
 
-它与 **FreeSWITCH** 作为**「软交换一体化单元（Telephony Pod）」**伴生运行：
-1. **彻底解耦**：控制面（Java 微服务）与媒体面（FreeSWITCH）完全解耦，消除 $M \times N$ 网状长连接；
-2. **就地降噪与高吞吐**：在本地过滤 90% 的冗余 ESL 内部事件，仅向上游 NATS 广播标准化业务事件；
-3. **极简对接**：底层生涩的 ESL 文本命令被全面封装为标准 **JSON-RPC 2.0** 接口，屏蔽变量陷阱与转义；
-4. **集群治理能力**：内置节点假死探活（Watchdog）、容量限制（Overload Protection）与无损滚动升级（Call Draining）。
+The Sidecar does not own FCC agents, business routing, flow versions, customer records, or business CDR projections.
 
----
-
-## 🏛️ 整体架构
-
-```mermaid
-flowchart LR
-    subgraph JavaCloud["☁️ Java 控制面集群"]
-        J["Spring Boot / 呼叫中心应用"]
-    end
-
-    subgraph NATSBus["⚡ NATS 消息总线"]
-        N["NATS Cluster<br/>• fs.cmd.{nodeId} (RPC)<br/>• fs.event.* (Event Pub/Sub)<br/>• fs.status.* (Heartbeat)"]
-    end
-
-    subgraph TelephonyPod["📦 软交换一体化单元 (Telephony Pod)"]
-        direction TB
-        subgraph Agent["Go Sidecar Agent"]
-            A1["JSON-RPC 2.0 路由器"]
-            A2["事件就地清洗 (Normalizer)"]
-            A3["节点治理 (Draining/Metrics)"]
-        end
-        subgraph Core["FreeSWITCH"]
-            F["SIP / RTP / ESL 8021"]
-        end
-        A1 <-->|UDS / 127.0.0.1| F
-        A2 <-->|UDS / 127.0.0.1| F
-    end
-
-    JavaCloud <==>|JSON-RPC & Events| NATSBus
-    NATSBus <==>|Request-Reply & Pub/Sub| TelephonyPod
-```
-
----
-
-## 📂 项目结构
+## Runtime architecture
 
 ```text
-chandler25-fs-sidecar-agent/
-├── main.go                       # 应用程序入口与信号优雅退出
-├── config/
-│   └── config.go                 # 环境变量配置管理
-├── esl/
-│   └── client.go                 # 纯 Go 高性能 Inbound ESL 客户端 (支持自动断线指数重连)
-├── event/
-│   └── normalizer.go             # 原始 ESL 事件到标准 JSON 归一化清洗器
-├── governance/
-│   └── node.go                   # 节点生命周期、并发限流、Call Draining 治理
-├── nats/
-│   └── client.go                 # NATS 连接管理、RPC 监听与事件/心跳发布
-├── rpc/
-│   ├── types.go                  # JSON-RPC 2.0 规范报文与呼叫中心专有错误码
-│   ├── handler.go                # RPC 调度器与路由器
-│   └── methods.go                # 核心呼叫控制方法实现 (originate, bridge, hangup, transfer 等)
-├── test/
-│   └── nats_client_demo.go       # 客户端测试与实时事件监听工具
-├── docker-compose.yml            # 本地 NATS 服务一键编排
-└── README.md
+fcc-server :8085
+    |
+    | NATS request/reply and events
+    v
+NATS <------> Sidecar :8088 <------> PostgreSQL
+                  |
+                  | ESL :8021
+                  v
+              FreeSWITCH
+
+fswitch-web :8008 ------ HTTP/WebSocket ------^
+fcc-admin :8089 -------- selected admin HTTP --^
 ```
 
----
+## NATS contract
 
-## 🚀 快速启动指南
+| Subject | Direction | Purpose |
+| --- | --- | --- |
+| `fs.cmd.{nodeId}` | Java to Sidecar | JSON-RPC 2.0 commands |
+| `fs.event.{nodeId}.channel` | Sidecar to Java | normalized channel lifecycle |
+| `fs.event.{nodeId}.dtmf` | Sidecar to Java | DTMF events |
+| `fs.event.{nodeId}.record` | Sidecar to Java | recording events |
+| `fs.event.{nodeId}.registration` | Sidecar to Java | SIP registration events |
+| `fs.status.{nodeId}.heartbeat` | Sidecar to control plane | node health and capacity |
 
-### 1. 启动本地 NATS 消息总线
-通过 Docker Compose 启动带 Web 监控大盘的 NATS 实例：
+Implemented RPC methods include `FNode.Dial`, `FNode.ChannelBridge`, `FNode.ReadDTMF`, `FNode.Play`, `FNode.Record`, `FNode.Hangup`, `FNode.Transfer`, `FNode.NativeAPI`, `FNode.Drain`, `FNode.Resume`, and `FNode.Status`. Only these canonical names are registered; old `call.*`, `node.*`, and `FNode.Bridge` aliases are rejected.
+
+The `nodeId` must exactly match the Java `FCC_DEFAULT_NODE_ID`; otherwise commands are sent to an unconsumed subject.
+
+## HTTP and WebSocket API
+
+The server listens on `HTTP_PORT`, default `8088`.
+
+- `GET /health` and `GET /api/v1/health`
+- `/api/v1/extensions` for extension create/check/delete
+- `GET /api/v1/telephony/status`
+- registration query and flush
+- extension query and password update
+- channel/call query, kill, and transfer
+- Sofia profile and gateway operations
+- raw FreeSWITCH CDR query
+- `POST /api/v1/telephony/cli/exec`
+- `WS /api/v1/telephony/ws/console-logs`
+
+The CLI, gateway, extension, registration, and channel mutation endpoints are privileged operations. The current Go HTTP server does not provide a complete production authorization boundary; restrict it to a trusted management network or place it behind an authenticated gateway.
+
+## Configuration
+
+| Environment variable | Purpose |
+| --- | --- |
+| `NODE_ID` | node identity used in NATS subjects |
+| `NATS_URL` | NATS server URL |
+| `FS_ESL_ADDR` | FreeSWITCH ESL address |
+| `FS_ESL_PASSWORD` | ESL credential |
+| `MAX_CHANNELS` | capacity limit |
+| `HEARTBEAT_INTERVAL_SEC` | heartbeat interval |
+| `HTTP_PORT` | management HTTP port |
+| `EXTENSION_SCRIPT` | extension lifecycle script |
+| `PG_DSN` | PostgreSQL connection string |
+| `LOG_LEVEL` | logging level |
+
+Production secrets must be supplied by environment/secret management and must not be committed or logged.
+
+## Build and run
+
+The current module declares Go `1.27.1`.
+
 ```bash
-docker compose up -d
-```
-> Web 监控界面访问地址：http://localhost:8222
-
-### 2. 编译并启动 Go Sidecar Agent
-```bash
-# 编译二进制包 (体积仅约 9.4MB)
-go build -o fs-agent main.go
-
-# 启动 (使用默认配置：NodeID=本机主机名, NATS=127.0.0.1:4222, FS=127.0.0.1:8021)
-./fs-agent
+go build -o fs-sidecar-agent .
+go test ./api ./config ./db ./esl ./event ./governance ./nats ./rpc
+go run .
 ```
 
-若需自定义环境变量：
-```bash
-NODE_ID=telephony-pod-01 NATS_URL=nats://127.0.0.1:4222 FS_ESL_ADDR=127.0.0.1:8021 ./fs-agent
-```
+A local NATS instance can be started with the repository `docker-compose.yml`. FreeSWITCH, PostgreSQL, extension script paths, and credentials still need to match the host deployment.
 
----
+## Verification limits
 
-## 🧪 客户端联调与测试
+- Focused tests cover recording event names, rejection of legacy RPC aliases, and credential exclusion from public JSON. Runtime integration still requires external services.
+- `test/nats_client_demo.go` and `test/verify_fnode_flow.go` are separate manual integration programs. They both declare `package main` and duplicate names, so `go test ./...` is not a valid repository-wide command until those tools are split into separate directories.
+- An end-to-end result requires real NATS, PostgreSQL, FreeSWITCH ESL, SIP endpoints, and observable media/events.
 
-我们内置了 `test/nats_client_demo.go` 模拟客户端工具：
-
-### 1. 查看节点运行状态与容量快照
-```bash
-go run test/nats_client_demo.go -cmd status
-```
-**收到响应**：
-```json
-{
-  "activeChannels": 0,
-  "maxChannels": 1000,
-  "nodeId": "telephony-pod-01",
-  "state": "HEALTHY",
-  "timestamp": 1789624500123,
-  "uptimeSeconds": 15
-}
-```
-
-### 2. 模拟灰度下线（开启 Call Draining 沥干模式）
-```bash
-go run test/nats_client_demo.go -cmd drain
-```
-节点进入 `DRAINING` 状态，后续任何新外呼将被拒绝（返回 `-32006 Node is draining`），存量通话不受影响。
-
-### 3. 恢复接单
-```bash
-go run test/nats_client_demo.go -cmd resume
-```
-
-### 4. 实时监听全集群事件流与心跳
-```bash
-go run test/nats_client_demo.go -cmd listen
-```
-当 FreeSWITCH 发生任何呼叫、接听、按键时，终端将实时打印清洗后的纯净 JSON 事件：
-```json
-{
-  "eventId": "evt-b8f2a193",
-  "nodeId": "telephony-pod-01",
-  "timestamp": 1789624510045,
-  "eventType": "CALL_ANSWERED",
-  "bizId": "bridge-xxx",
-  "channelUuid": "2a80d369-c66f-4200-9fb9-b31dfd4e1bad",
-  "role": "caller",
-  "extension": "1007",
-  "data": {
-    "sipCode": "200"
-  }
-}
-```
-
----
-
-## 📡 JSON-RPC 2.0 接口规范清单
-
-发往 Subject：`fs.cmd.{nodeId}`
-
-| 方法 Method | 功能说明 | 关键入参 |
-| :--- | :--- | :--- |
-| `call.originate` | 外呼单端分机入 Park | `extension`, `uuid`, `bizId`, `role`, `timeoutSeconds`, `parkAfterBridge`, `hangupAfterBridge` |
-| `call.bridge` | 双端通话强制桥接 | `uuidA`, `uuidB` |
-| `call.hangup` | 主动挂机 | `uuid`, `cause` (默认 `NORMAL_CLEARING`) |
-| `call.transfer` | 盲转或转入指定应用 | `uuid`, `destination`, `inline` (布尔值) |
-| `call.transferToConference` | 动态加入三方会议室 | `uuid`, `conferenceName`, `profile` (默认 `default`) |
-| `call.playAndGetDigits` | 满意度评价放音并收号 | `uuid`, `audioFile`, `minDigits`, `maxDigits`, `timeoutMs`, `regex` |
-| `call.recordStart` | 开启双向通话录音 | `uuid`, `filePath` |
-| `call.recordStop` | 停止通话录音 | `uuid`, `filePath` |
-| `node.drain` | 节点优雅下线（沥干） | 无 |
-| `node.resume` | 节点恢复接入 | 无 |
-| `node.status` | 查询节点状态与通道数 | 无 |
+See [docs/DESIGN.md](./docs/DESIGN.md) for implemented protocol and data boundaries.

@@ -19,10 +19,10 @@
         </button>
       </div>
       <button 
-        @click="$emit('toast', '打开 SIP Profile 参数配置弹窗')"
+        disabled
         class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm px-5 py-2.5 rounded-xl border border-slate-700 font-semibold transition"
       >
-        编辑 Profile 参数
+        Profile 编辑尚未接入
       </button>
     </div>
 
@@ -35,21 +35,17 @@
             <span class="text-sm text-slate-400">Sofia SIP Profile 物理监听与信令驱动</span>
           </div>
           <span class="text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 rounded text-xs font-mono">
-            {{ currentProfile?.state || 'RUNNING' }}
+            {{ currentProfile?.state || 'UNKNOWN' }}
           </span>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 font-mono text-base">
           <div class="space-y-3.5 bg-slate-900/60 p-5 rounded-xl border border-slate-800/80">
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">SIP 绑定地址:</span><span class="text-white font-bold">{{ currentProfile?.bind_ip || '192.168.18.64' }}:{{ currentProfile?.sip_port || 5060 }}</span></div>
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">WebSocket / WSS:</span><span class="text-white font-bold">:5066 (ws) / :7443 (wss)</span></div>
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">RTP 绑定 IP:</span><span class="text-white font-bold">{{ currentProfile?.bind_ip || '192.168.18.64' }}</span></div>
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">Dialplan:</span><span class="text-cyan-400 font-bold">{{ currentProfile?.dialplan || 'XML' }} (context: {{ currentProfile?.context || 'default' }})</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">SIP 绑定地址:</span><span class="text-white font-bold">{{ currentProfile?.bind_ip || '未提供' }}:{{ currentProfile?.sip_port || '-' }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">WebSocket / WSS:</span><span class="text-white font-bold">{{ currentProfile?.ws_port || '-' }} / {{ currentProfile?.wss_port || '-' }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">Dialplan:</span><span class="text-cyan-400 font-bold">{{ currentProfile?.dialplan || '-' }} (context: {{ currentProfile?.context || '-' }})</span></div>
           </div>
           <div class="space-y-3.5 bg-slate-900/60 p-5 rounded-xl border border-slate-800/80">
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">音频 Codecs:</span><span class="text-cyan-300 font-bold">{{ currentProfile?.codecs || 'OPUS, G722, PCMU, PCMA' }}</span></div>
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">DTMF 模式:</span><span class="text-white font-bold">rfc2833 (payload 101)</span></div>
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">NAT 穿透 (Auto-NAT):</span><span class="text-slate-300 font-bold">false (Local Subnet)</span></div>
-            <div class="flex justify-between"><span class="text-slate-400 font-sans">底层心跳状态:</span><span class="text-emerald-400 font-bold">HEALTHY</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">音频 Codecs:</span><span class="text-cyan-300 font-bold">{{ currentProfile?.codecs || '未提供' }}</span></div>
           </div>
         </div>
       </div>
@@ -87,6 +83,6 @@ const rawOutput = computed(() => {
   if (currentProfile.value?.raw_lines) {
     return currentProfile.value.raw_lines.join('\n')
   }
-  return 'Loading sofia status...'
+  return '未返回 Profile 回显'
 })
 </script>

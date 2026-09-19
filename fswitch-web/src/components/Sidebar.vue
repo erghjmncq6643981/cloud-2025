@@ -108,19 +108,6 @@
       </button>
     </div>
 
-    <!-- 底部节点运行态卡片 -->
-    <div class="px-3.5">
-      <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-sm space-y-2.5">
-        <div class="flex items-center justify-between text-slate-300 font-medium">
-          <span>Sidecar Agent:</span>
-          <span class="text-emerald-400 font-mono font-bold text-sm">:8088 UP</span>
-        </div>
-        <div class="flex items-center justify-between text-slate-300 font-medium">
-          <span>PostgreSQL:</span>
-          <span class="text-cyan-300 font-mono font-bold text-sm">:5432 SYNC</span>
-        </div>
-      </div>
-    </div>
   </aside>
 </template>
 
