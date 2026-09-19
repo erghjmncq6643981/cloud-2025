@@ -136,3 +136,7 @@ logs
 target
 *.iml
 .idea
+
+# Node / 前端构建产物
+node_modules/
+dist/
