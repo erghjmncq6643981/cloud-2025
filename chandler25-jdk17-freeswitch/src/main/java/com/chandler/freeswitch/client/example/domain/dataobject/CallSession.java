@@ -48,4 +48,34 @@ public class CallSession extends CallCenterBaseDO {
 
     /** 挂断原因 */
     private String hangupReason;
+
+    /** 执行流程编码: FLOW-INBOUND / FLOW-OUTBOUND / FLOW-PHONE-DIRECT */
+    private String flowCode;
+
+    /** 呼入路由模式: DID_DIRECT / RULE_ENGINE / HTTP_CALLBACK */
+    private String routeMode;
+
+    /** 路由结果类型: AGENT / GROUP */
+    private String routeTargetType;
+
+    /** 路由命中目标: 坐席工号(如 901415) 或 技能组ID */
+    private String routeTargetId;
+
+    /** 最终服务坐席工号 */
+    private String agentWorkNo;
+
+    /** 最终服务坐席姓名 */
+    private String agentName;
+
+    /** 振铃等待耗时(毫秒) */
+    private Integer ringDurationMs;
+
+    /** 双轨录音时长(秒) */
+    private Integer audioDurationSec;
+
+    /** 客户满意度按键评分 (1-5星) */
+    private Integer satisfactionScore;
+
+    /** 关联双轨录音文件表ID */
+    private Long recordFileId;
 }

@@ -8,7 +8,9 @@ import (
 	"syscall"
 	"time"
 
+	"chandler25-fs-sidecar-agent/api"
 	"chandler25-fs-sidecar-agent/config"
+	"chandler25-fs-sidecar-agent/db"
 	"chandler25-fs-sidecar-agent/esl"
 	"chandler25-fs-sidecar-agent/event"
 	"chandler25-fs-sidecar-agent/governance"
@@ -29,8 +31,15 @@ func main() {
 	// 1. 加载配置
 	cfg := config.LoadConfig()
 	log.Printf("🚀 [启动] 软交换一体化节点 ID: %s", cfg.NodeID)
-	log.Printf("⚙️ [配置] NATS URL: %s, FS ESL: %s, 最大并发通道: %d",
-		cfg.NatsURL, cfg.FSEslAddr, cfg.MaxChannels)
+	log.Printf("⚙️ [配置] NATS URL: %s, FS ESL: %s, 最大并发通道: %d, HTTP 管理端口: %s",
+		cfg.NatsURL, cfg.FSEslAddr, cfg.MaxChannels, cfg.HttpPort)
+
+	// 1.5 初始化 PostgreSQL 核心数据库连接池
+	dbClient, err := db.InitDB(cfg.PostgresDSN)
+	if err != nil {
+		log.Printf("⚠️ [PostgreSQL] 核心数据库初始连接失败: %v (后续操作将降级重试)", err)
+	}
+	repo := db.NewRepository(dbClient)
 
 	// 2. 初始化节点治理管理器
 	gov := governance.NewNodeManager(cfg.NodeID, cfg.MaxChannels)
@@ -52,6 +61,14 @@ func main() {
 			log.Fatalf("❌ [NATS] 监听 RPC 命令失败: %v", err)
 		}
 	}
+
+	// 5.5 初始化并启动管理面 HTTP 同步服务 (分机开户、控制面 API 及终端日志流)
+	httpServer := api.NewServer(cfg, gov, eslClient, repo)
+	go func() {
+		if err := httpServer.Start(); err != nil {
+			log.Printf("❌ [HTTP] HTTP 管理服务异常: %v", err)
+		}
+	}()
 
 	// 6. 异步启动 FreeSWITCH ESL 连接与重连守护
 	go func() {

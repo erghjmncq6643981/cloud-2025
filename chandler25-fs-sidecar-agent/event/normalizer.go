@@ -57,6 +57,37 @@ type RecordEventParams struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// RegistrationEventParams 标准 Event.Registration 参数 (SIP 分机注册/注销/过期)
+type RegistrationEventParams struct {
+	NodeID    string `json:"node_id"`
+	User      string `json:"user"`
+	Domain    string `json:"domain"`
+	Status    string `json:"status"` // REGISTERED, UNREGISTERED, EXPIRED
+	NetworkIP string `json:"network_ip,omitempty"`
+	Port      string `json:"port,omitempty"`
+	UserAgent string `json:"user_agent,omitempty"`
+	Contact   string `json:"contact,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// GatewayEventParams 标准 Event.Gateway 参数 (SIP 中继网关状态变动)
+type GatewayEventParams struct {
+	NodeID    string `json:"node_id"`
+	Gateway   string `json:"gateway"`
+	Profile   string `json:"profile,omitempty"`
+	State     string `json:"state"` // UP, DOWN, FAILED, NOREG
+	Timestamp int64  `json:"timestamp"`
+}
+
+// SupervisionEventParams 标准 Event.Supervision 参数 (班长监听、耳语、强插)
+type SupervisionEventParams struct {
+	NodeID     string `json:"node_id"`
+	Action     string `json:"action"` // START, STOP
+	SpyUUID    string `json:"spy_uuid"`
+	TargetUUID string `json:"target_uuid"`
+	Timestamp  int64  `json:"timestamp"`
+}
+
 // StandardRpcNotification 标准 JSON-RPC 2.0 通知报文
 type StandardRpcNotification struct {
 	JSONRPC string      `json:"jsonrpc"`
@@ -66,8 +97,8 @@ type StandardRpcNotification struct {
 
 // NormalizedEventResult 归一化事件结果封装
 type NormalizedEventResult struct {
-	Category       string // "channel", "dtmf", "record", "conf"
-	State          string // 通道状态，如 "START", "CALLING", "DESTROY" 等
+	Category       string // "channel", "dtmf", "record", "conf", "registration"
+	State          string // 通道状态，如 "START", "CALLING", "DESTROY", 或分机状态 "REGISTERED", "UNREGISTERED"
 	UUID           string
 	CtrlUUID       string
 	RawJSON        []byte
@@ -91,6 +122,116 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 		return nil
 	}
 
+	nowMs := time.Now().UnixMilli()
+
+	// 特殊处理 CUSTOM 事件（如 sofia 分机注册/注销/过期事件），无 Unique-ID 话道标识
+	if rawEventName == "CUSTOM" {
+		subclass := raw["Event-Subclass"]
+		switch subclass {
+		case "sofia::register", "sofia::unregister", "sofia::expire":
+			status := "REGISTERED"
+			if subclass == "sofia::unregister" {
+				status = "UNREGISTERED"
+			} else if subclass == "sofia::expire" {
+				status = "EXPIRED"
+			}
+			user := raw["from-user"]
+			if user == "" {
+				user = raw["username"]
+			}
+			domain := raw["from-host"]
+			if domain == "" {
+				domain = raw["realm"]
+			}
+			regParams := RegistrationEventParams{
+				NodeID:    n.nodeID,
+				User:      user,
+				Domain:    domain,
+				Status:    status,
+				NetworkIP: raw["network-ip"],
+				Port:      raw["network-port"],
+				UserAgent: raw["user-agent"],
+				Contact:   raw["contact"],
+				Timestamp: nowMs,
+			}
+			notif := StandardRpcNotification{
+				JSONRPC: "2.0",
+				Method:  "Event.Registration",
+				Params:  regParams,
+			}
+			data, _ := json.Marshal(notif)
+			return &NormalizedEventResult{
+				Category:       "registration",
+				State:          status,
+				UUID:           user,
+				RawJSON:        data,
+				IsChannelState: false,
+			}
+
+		case "sofia::gateway_state", "sofia::gateway_add", "sofia::gateway_delete":
+			gwName := raw["Gateway"]
+			if gwName == "" {
+				gwName = raw["gateway-name"]
+			}
+			gwState := raw["State"]
+			if gwState == "" {
+				if subclass == "sofia::gateway_add" {
+					gwState = "UP"
+				} else if subclass == "sofia::gateway_delete" {
+					gwState = "DOWN"
+				} else {
+					gwState = "UNKNOWN"
+				}
+			}
+			gwParams := GatewayEventParams{
+				NodeID:    n.nodeID,
+				Gateway:   gwName,
+				Profile:   raw["Profile"],
+				State:     gwState,
+				Timestamp: nowMs,
+			}
+			notif := StandardRpcNotification{
+				JSONRPC: "2.0",
+				Method:  "Event.Gateway",
+				Params:  gwParams,
+			}
+			data, _ := json.Marshal(notif)
+			return &NormalizedEventResult{
+				Category:       "gateway",
+				State:          gwState,
+				UUID:           gwName,
+				RawJSON:        data,
+				IsChannelState: false,
+			}
+
+		case "eavesdrop::start", "eavesdrop::stop":
+			action := "START"
+			if subclass == "eavesdrop::stop" {
+				action = "STOP"
+			}
+			supParams := SupervisionEventParams{
+				NodeID:     n.nodeID,
+				Action:     action,
+				SpyUUID:    raw["Spy-Unique-ID"],
+				TargetUUID: raw["Target-Unique-ID"],
+				Timestamp:  nowMs,
+			}
+			notif := StandardRpcNotification{
+				JSONRPC: "2.0",
+				Method:  "Event.Supervision",
+				Params:  supParams,
+			}
+			data, _ := json.Marshal(notif)
+			return &NormalizedEventResult{
+				Category:       "supervision",
+				State:          action,
+				UUID:           raw["Spy-Unique-ID"],
+				RawJSON:        data,
+				IsChannelState: false,
+			}
+		}
+	}
+
 	uuid := raw["Unique-ID"]
 	if uuid == "" {
 		return nil
@@ -104,8 +245,6 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 	if ctrlUUID == "" {
 		ctrlUUID = raw["variable_sip_h_X-Ctrl-UUID"]
 	}
-
-	nowMs := time.Now().UnixMilli()
 
 	switch rawEventName {
 	case "CHANNEL_CREATE":
@@ -145,6 +284,20 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 		state := "READY"
 		direction := raw["Call-Direction"]
 		params := n.buildChannelParams(raw, uuid, ctrlUUID, state, direction, nowMs)
+		return n.wrapChannelNotification(params, state, uuid, ctrlUUID)
+
+	case "CHANNEL_HOLD":
+		state := "HOLD"
+		direction := raw["Call-Direction"]
+		params := n.buildChannelParams(raw, uuid, ctrlUUID, state, direction, nowMs)
+		params.Hold = true
+		return n.wrapChannelNotification(params, state, uuid, ctrlUUID)
+
+	case "CHANNEL_UNHOLD":
+		state := "UNHOLD"
+		direction := raw["Call-Direction"]
+		params := n.buildChannelParams(raw, uuid, ctrlUUID, state, direction, nowMs)
+		params.Hold = false
 		return n.wrapChannelNotification(params, state, uuid, ctrlUUID)
 
 	case "CHANNEL_BRIDGE":
@@ -259,6 +412,30 @@ func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
 			}
 		}
 		return nil
+
+	case "RECORD_START":
+		recParams := RecordEventParams{
+			NodeID:    n.nodeID,
+			CtrlUUID:  ctrlUUID,
+			UUID:      uuid,
+			Action:    "START",
+			FilePath:  raw["Record-File-Path"],
+			Timestamp: nowMs,
+		}
+		notif := StandardRpcNotification{
+			JSONRPC: "2.0",
+			Method:  "Event.Record",
+			Params:  recParams,
+		}
+		data, _ := json.Marshal(notif)
+		return &NormalizedEventResult{
+			Category:       "record",
+			State:          "RECORD_START",
+			UUID:           uuid,
+			CtrlUUID:       ctrlUUID,
+			RawJSON:        data,
+			IsChannelState: false,
+		}
 
 	case "RECORD_STOP":
 		recSec, _ := strconv.Atoi(raw["Record-Seconds"])

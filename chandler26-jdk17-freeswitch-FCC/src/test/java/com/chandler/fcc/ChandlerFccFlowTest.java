@@ -9,6 +9,7 @@ import com.chandler.fcc.common.enums.DirectionType;
 import com.chandler.fcc.common.enums.FlowModelType;
 import com.chandler.fcc.controller.CallVerifyController;
 import com.chandler.fcc.fcc.client.FccClient;
+import com.chandler.fcc.fcc.client.SidecarAdminClient;
 import com.chandler.fcc.fcc.client.dto.FNodePlayDTO;
 import com.chandler.fcc.fcc.client.dto.FNodeReadDTMFDTO;
 import com.chandler.fcc.fcc.client.dto.FNodeRecordDTO;
@@ -32,6 +33,9 @@ public class ChandlerFccFlowTest {
 
     @Autowired
     private FccClient fccClient;
+
+    @Autowired
+    private SidecarAdminClient sidecarAdminClient;
 
     @Autowired
     private CallVerifyController callVerifyController;
@@ -179,5 +183,50 @@ public class ChandlerFccFlowTest {
         FNodeResult hangupRes = fccClient.hangup(null, mockUuid, "NORMAL_CLEARING");
         log.info("Hangup 指令响应: {}", hangupRes);
         assertNotNull(hangupRes);
+    }
+
+    @Test
+    @DisplayName("测试用例 7: Sidecar HTTP 同步分机开户、状态检查与销户闭环")
+    public void testSidecarExtensionManagement() {
+        // 1. 测试健康检查
+        Map<String, Object> health = sidecarAdminClient.healthCheck();
+        assertNotNull(health);
+        assertEquals("UP", health.get("status"));
+        assertEquals("HEALTHY", health.get("state"));
+        assertEquals(Boolean.TRUE, health.get("fs_alive"));
+
+        String testExt = "1098";
+
+        // 2. 测试分机开户 (POST /api/v1/extensions)
+        SidecarAdminClient.SidecarResponse createResp = sidecarAdminClient.createExtension(
+                testExt, "PassWord@123", "default", "default"
+        );
+        log.info("开户响应: {}", createResp);
+        assertNotNull(createResp);
+        assertTrue(createResp.isSuccess());
+        assertEquals(200, createResp.getCode());
+        assertEquals(testExt, createResp.getExtension());
+
+        // 3. 测试分机状态检查 (GET /api/v1/extensions)
+        SidecarAdminClient.SidecarResponse checkResp = sidecarAdminClient.checkExtension(testExt);
+        log.info("检查分机响应: {}", checkResp);
+        assertNotNull(checkResp);
+        assertTrue(checkResp.isSuccess());
+        assertNotNull(checkResp.getData());
+        assertEquals(Boolean.TRUE, checkResp.getData().get("exists"));
+
+        // 4. 测试分机销户 (DELETE /api/v1/extensions)
+        SidecarAdminClient.SidecarResponse deleteResp = sidecarAdminClient.deleteExtension(testExt);
+        log.info("销户响应: {}", deleteResp);
+        assertNotNull(deleteResp);
+        assertTrue(deleteResp.isSuccess());
+        assertEquals(200, deleteResp.getCode());
+
+        // 5. 再次检查分机已被清理
+        SidecarAdminClient.SidecarResponse checkAfterDelete = sidecarAdminClient.checkExtension(testExt);
+        log.info("销户后检查响应: {}", checkAfterDelete);
+        assertNotNull(checkAfterDelete);
+        assertNotNull(checkAfterDelete.getData());
+        assertEquals(Boolean.FALSE, checkAfterDelete.getData().get("exists"));
     }
 }

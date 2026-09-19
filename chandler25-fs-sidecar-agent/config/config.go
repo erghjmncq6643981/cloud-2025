@@ -14,6 +14,9 @@ type Config struct {
 	MaxChannels          int
 	HeartbeatIntervalSec int
 	LogLevel             string
+	HttpPort             string
+	ScriptPath           string
+	PostgresDSN          string
 }
 
 // LoadConfig 从环境变量加载配置，带生产级默认值
@@ -31,6 +34,9 @@ func LoadConfig() *Config {
 		MaxChannels:          getEnvInt("MAX_CHANNELS", 1000),
 		HeartbeatIntervalSec: getEnvInt("HEARTBEAT_INTERVAL_SEC", 3),
 		LogLevel:             getEnv("LOG_LEVEL", "INFO"),
+		HttpPort:             getEnv("HTTP_PORT", "8088"),
+		ScriptPath:           getEnv("EXTENSION_SCRIPT", "/opt/homebrew/etc/freeswitch/scripts/manage_extension.sh"),
+		PostgresDSN:          getEnv("PG_DSN", "postgres://postgres:123456@127.0.0.1:5432/freeswitch?sslmode=disable"),
 	}
 }
 

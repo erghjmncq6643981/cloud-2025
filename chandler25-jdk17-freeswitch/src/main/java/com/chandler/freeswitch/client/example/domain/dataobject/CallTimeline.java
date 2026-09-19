@@ -51,6 +51,18 @@ public class CallTimeline implements Serializable {
     /** 距离上一节点的耗时(毫秒) */
     private Integer durationMs;
 
+    /** 所属业务阶段: TRIGGER(触发应答) / ROUTE(路由决策) / CONNECTED(通话中) / END(结束收尾) */
+    private String stage;
+
+    /** 原子动作编码: ANSWER / READ_DTMF / HTTP_CALLBACK / RULE_ENGINE / BRIDGE / RECORD_START / POST_SURVEY / HANGUP */
+    private String actionCode;
+
+    /** 执行状态: SUCCESS(成功) / WARNING(重试或降级) / FAILED(失败) */
+    private String status;
+
+    /** 动作上下文/出入参JSON (如按键值 "1"、接口返回的坐席工号、错误信息等) */
+    private String payload;
+
     /** 创建时间 */
     private Date createdAt;
 }

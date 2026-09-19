@@ -753,3 +753,183 @@ create table call_timeline (
 - 事件驱动推进
 
 如果这 5 个能力先建好，后续无论你要做双呼、呼入分配、外线外呼、咨询转、三方通话，都会稳很多。
+
+---
+
+## 21. 呼入 3 种路由策略、Stage-Action 通话流水线与数据库 DDL 调整规范
+
+### 21.1 业务背景与通话两级模型 (Stage + Action)
+
+呼叫中心每一次通话，本质上都是在**预设业务流程（Flow）**上的一次实例化运行。
+为了让 IVR 流程可视化编排与 CDR 通话记录轨迹（Call Journey Trace）高度一致，系统统一采用**“阶段（Stage）+ 动作（Action）”**的两级模型进行建模与生命周期管理：
+
+```
+[ 通话全生命周期流程模型 ]
+├── 1. TRIGGER (触发阶段)
+│   ├── CHANNEL_CREATE (通道建立)
+│   ├── ANSWER (系统摘机应答)
+│   └── PLAY_WELCOME (播放迎宾欢迎语)
+├── 2. ROUTE (路由决策与排队阶段)
+│   ├── READ_DTMF (按键交互/语音识别)
+│   ├── ROUTE_DECISION (执行路由策略：DID直达 / 规则引擎 / 接口回调)
+│   ├── QUEUE_ACD (进入ACD排队池/溢出处理)
+│   └── CALL_AGENT (向目标坐席发起呼叫振铃)
+├── 3. CONNECTED (通话中与业务交互阶段)
+│   ├── BRIDGE (主被叫通道桥接双通)
+│   ├── RECORD_START (双向混音录音启动)
+│   └── BUSINESS_EVENT (通话中转接、保持、三方、静音)
+└── 4. END (挂断与后置服务阶段)
+    ├── RECORD_STOP (录音结束并归档对象存储)
+    ├── POST_SURVEY (满意度按键评价收集)
+    ├── HANGUP (主被叫释放拆线)
+    └── CDR_PERSISTENCE (生成最终CDR话单与效能聚合)
+```
+
+每个 Action 产生一条结构化时序记录（存储至 `call_timeline`），前端通过 `stage` + `action_code` 即可拼装还原出清晰、高颜值的全生命周期流水线卡片。
+
+---
+
+### 21.2 呼入三大路由策略架构
+
+在所有呼叫类型中，**呼入流程（Inbound Flow）**由于业务场景多样，其路由策略最为关键。系统支持 3 种核心路由策略，并在流程中提供可视化配置与仿真验证：
+
+#### 策略一：DID 直达（DID_DIRECT）
+- **核心逻辑**：跳过任何语音按键或复杂判断，直接将特定接入号码（DID）、专属客服号码、VIP 专线映射绑定到指定坐席分机或坐席组。
+- **决策耗时**：内存级哈希映射，时延 `< 50ms`。
+- **典型场景**：企业大客户 1V1 专属管家专线、员工内部直拨分机、电销回拨专属座机。
+
+#### 策略二：多维规则引擎路由（RULE_ENGINE）
+- **核心逻辑**：基于预先配置的多维度规则匹配流水线，按照优先级梯次仲裁目标客服组：
+  1. **黑名单 / 高风险拦截**：直接切断或转接风控专用语音；
+  2. **客户画像标签匹配**：如 `VIP_GOLD`、`HIGH_VALUE` 客户直进优先特权技能组，享受排队插队；
+  3. **时段分流**：根据工作日时段（09:00-18:00）、午休时段、夜间值班（18:00-09:00）、法定节假日，自动切换对应值班客服组或转外包呼叫中心；
+  4. **地域归属地分流**：根据主叫手机号归属省市匹配属地客服组。
+- **决策耗时**：`< 100ms`。
+
+#### 策略三：业务接口动态回调（HTTP_CALLBACK）
+- **核心逻辑**：呼叫中心不硬编码业务关系，在呼入应答后向业务中台（如 CRM、订单系统、物流运单系统）发送同步 HTTP POST 请求，由业务接口计算后返回分配结果：
+  - 请求载荷：`{ "callId": "...", "caller": "13800000000", "called": "021-95598", "channelId": "..." }`
+  - 响应载荷：`{ "code": 200, "data": { "targetType": "AGENT", "targetId": "1001", "priority": 10 } }`
+- **容灾与降级机制（核心保障）**：
+  - 接口配置有严格的**超时阈值（默认 800ms）**。
+  - 一旦发生 HTTP 超时、网络抖动、5xx 服务端错误或解析失败，网关**无感知毫秒级触发熔断降级**，自动路由到预设的兜底客服组（`fallbackGroupId`），并记录降级审计日志，绝对避免用户听到死音或通话悬挂。
+
+---
+
+### 21.3 数据库调整方案与 SQL DDL 规范
+
+为了全面支持上述业务模型，数据库需调整与新增 3 张核心表：
+
+#### 1. 会话主表 `call_session` 扩展 DDL
+扩展流程、路由策略及通话指标字段，使得 CDR 报表与质检查询无需跨多表复杂 JOIN：
+
+```sql
+-- 1. 为 call_session 表扩充流程与路由归因字段
+ALTER TABLE `call_session`
+  ADD COLUMN `flow_code` VARCHAR(64) NULL COMMENT '绑定的IVR流程编号(如 INBOUND_STANDARD_V1)' AFTER `scenario_key`,
+  ADD COLUMN `route_mode` VARCHAR(32) NULL COMMENT '路由策略模式(DID_DIRECT, RULE_ENGINE, HTTP_CALLBACK)' AFTER `flow_code`,
+  ADD COLUMN `route_target_type` VARCHAR(32) NULL COMMENT '路由目标类型(AGENT, GROUP, IVR_NODE)' AFTER `route_mode`,
+  ADD COLUMN `route_target_id` VARCHAR(64) NULL COMMENT '路由目标标识(坐席工号/客服组ID)' AFTER `route_target_type`,
+  ADD COLUMN `agent_work_no` VARCHAR(64) NULL COMMENT '接听坐席工号' AFTER `route_target_id`,
+  ADD COLUMN `agent_name` VARCHAR(64) NULL COMMENT '接听坐席姓名' AFTER `agent_work_no`,
+  ADD COLUMN `ring_duration_ms` BIGINT NULL DEFAULT 0 COMMENT '坐席振铃时长(毫秒)' AFTER `total_duration_ms`,
+  ADD COLUMN `audio_duration_sec` INT NULL DEFAULT 0 COMMENT '有效双方通话净时长(秒)' AFTER `ring_duration_ms`,
+  ADD COLUMN `satisfaction_score` INT NULL COMMENT '挂机满意度评分(1-5分)' AFTER `audio_duration_sec`,
+  ADD COLUMN `record_file_id` VARCHAR(128) NULL COMMENT '录音文件标识或OSS访问路径' AFTER `satisfaction_score`;
+
+-- 增加高效查询索引
+ALTER TABLE `call_session`
+  ADD INDEX `idx_cs_route_mode` (`route_mode`),
+  ADD INDEX `idx_cs_agent_work_no` (`agent_work_no`),
+  ADD INDEX `idx_cs_flow_code` (`flow_code`);
+```
+
+#### 2. 通话轨迹明细表 `call_timeline` 扩展 DDL
+为时间线打点增加 Stage、Action 以及 JSON 载荷能力，支撑前端甘特图与流水线组件的高保真渲染：
+
+```sql
+-- 2. 为 call_timeline 表扩充 Stage 与 Action 属性
+ALTER TABLE `call_timeline`
+  ADD COLUMN `stage` VARCHAR(32) NULL COMMENT '通话业务阶段(TRIGGER, ROUTE, CONNECTED, END)' AFTER `timeline_type`,
+  ADD COLUMN `action_code` VARCHAR(64) NULL COMMENT '原子动作编码(ANSWER, READ_DTMF, HTTP_CALLBACK, BRIDGE等)' AFTER `stage`,
+  ADD COLUMN `status` VARCHAR(32) NULL DEFAULT 'SUCCESS' COMMENT '动作执行结果状态(SUCCESS, FAILED, TIMEOUT, FALLBACK)' AFTER `action_code`,
+  ADD COLUMN `payload` JSON NULL COMMENT '动作出入参及扩展上下文详情(JSON格式)' AFTER `description`;
+
+-- 增加索引优化基于 call_id 和 stage 的时序拉取
+ALTER TABLE `call_timeline`
+  ADD INDEX `idx_ct_call_stage` (`call_id`, `stage`);
+```
+
+#### 3. IVR 流程配置表 `ivr_flow_config` 新建 DDL
+用于管理与持久化呼入、呼出、自动外呼各类业务流程的元数据与路由配置：
+
+```sql
+-- 3. 新建 IVR 流程配置表
+CREATE TABLE IF NOT EXISTS `ivr_flow_config` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+  `flow_code` VARCHAR(64) NOT NULL UNIQUE COMMENT '流程唯一编码',
+  `flow_name` VARCHAR(128) NOT NULL COMMENT '流程展示名称',
+  `call_type` VARCHAR(32) NOT NULL DEFAULT 'INBOUND' COMMENT '流程适用类型(INBOUND, OUTBOUND, AUTO_CALL)',
+  `status` VARCHAR(32) NOT NULL DEFAULT 'ACTIVE' COMMENT '状态(ACTIVE-运行中, DRAFT-草稿, DISABLED-已停用)',
+  `version` VARCHAR(32) NOT NULL DEFAULT 'v1.0' COMMENT '版本号',
+  `route_mode` VARCHAR(32) NOT NULL DEFAULT 'DID_DIRECT' COMMENT '呼入路由模式(DID_DIRECT, RULE_ENGINE, HTTP_CALLBACK)',
+  `route_config_json` JSON NULL COMMENT '路由模式详细配置(直达目标/规则列表/HTTP端点与降级组)',
+  `description` VARCHAR(500) NULL COMMENT '流程描述',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  INDEX `idx_ifc_call_type_status` (`call_type`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='IVR业务流程与路由配置表';
+```
+
+---
+
+### 21.4 与前端 UI 的联动映射规范
+
+1. **IVR 流程管理界面 (`IvrFlowView.vue`)**：
+   - 切换路由模式时，右侧泳道图节点自动根据路由模式切换（如切换到 `HTTP_CALLBACK` 时，泳道图动态展示“回调业务中台”并带有“超时800ms降级”指示）。
+   - 点击“路由参数配置”，唤出模态框，将表单数据与 `ivr_flow_config.route_config_json` 保持双向契约联动。
+   - 仿真运行控制台根据当前路由模式，即时打印 Stage 推进日志。
+
+2. **CDR 通话记录与过程详情 (`CdrReportView.vue`)**：
+   - 列表表格展示 `routeMode` 标签徽章。
+   - 点击“过程详情”按钮时，依据会话 ID 载入 `call_timeline` 时序流水线，通过 `stage` 将数据归纳为 4 大业务阶段卡片，卡片内清晰展开动作名称、耗时、状态及入参/出参（Payload），同时支持顶部音频播放器试听录音。
+
+---
+
+## 22. IVR 流程二期可编排模型、if-else 多分支决策与版本发布架构规范
+
+### 22.1 自上而下纵向流转模型 (Top-to-Bottom Vertical Pipeline)
+经过第一期重构，系统全面淘汰横向左右平铺的宽屏泳道图，统一采用**自上而下的纵向时序流水线**：
+1. **Stage 1: 触发与应答阶段 (START / ANSWER)**：通道建立与系统摘机，属于底层信令基础；
+2. **Stage 2: 路由决策与排队分流 (ROUTE & ACD)**：收号按键采集与多分支条件分流；
+3. **Stage 3: 通话服务中阶段 (CONNECTED)**：双向通道桥接与双轨立体声混音录音；
+4. **Stage 4: 结束分支处理阶段 (END HANDLING)**：正常挂断（录音归档、满意度评价）与异常中断（再见音、自动建回拨待办单）双分支处理；
+5. **Stage 5: 挂断与收尾阶段 (HANGUP / END)**：通道销毁释放、CDR 话单持久化与效能聚合。
+
+### 22.2 动作卡片属性分级与阶段扩展性 (Card Mutability & Stage Extensibility)
+1. **核心固定动作 (`[🔒 核心固定]`)**：
+   - 包括 `START`, `ANSWER`, `BRIDGE`, `HANGUP`, `END`；
+   - 保证底层 SIP 信令协议栈完整性，禁止用户随意删除，杜绝通信死音或通道泄露。
+2. **业务可配置与可扩展动作 (`[✏️ 可配置]`)**：
+   - 包括 `READ_DTMF`, `DID_DIRECT`, `HTTP_CALLBACK`, `RULE_ENGINE`, `QUEUE_ACD`, `RECORD_START/STOP`, `POST_SURVEY`；
+   - 核心开放阶段：**Stage 2 (ROUTE)** 与 **Stage 4 (END)** 允许动态点击 `+ 添加动作`（如插入外部 CRM HTTP 回调、大模型智能质检打点、短信通知等）。
+
+### 22.3 if-else 多分支流转规则规范
+在 Stage 2 (ROUTE) 中，针对按键交互支持标准化 if-else 多分支矩阵：
+- `IF 按键 == '1'` ➔ **DID 直达**（直拨坐席工号/专线，决策时延 < 50ms）；
+- `IF 按键 == '2'` ➔ **业务接口动态回调**（向外部业务中台发送 HTTP POST 获取坐席，带 800ms 超时熔断降级至兜底组）；
+- `IF 按键 == '3'` ➔ **多维规则引擎**（时段分流 + VIP 客户加权优先插队）；
+- `ELSE 默认分支` ➔ **通用客服兜底组**（用户未按键超时或输入非法按键时转默认排队，零漏话保障）。
+
+### 22.4 版本生命周期与安全发布自检
+1. **版本状态机**：
+   - `ACTIVE`：线上正在执行的生产版本（全局唯一生效）；
+   - `DRAFT`：草稿版本，支持任意编辑与仿真验证，不影响现网呼叫；
+   - `ARCHIVED`：历史归档版本，支持只读比对与一键回滚。
+2. **发布前自动化安全检查 (Pre-flight Check)**：
+   - 所有分支具备兜底节点；
+   - 所有 HTTP 回调节点配置超时阈值（<=1000ms）及降级组；
+   - 核心固定节点无缺失；
+   - FreeSWITCH Dialplan 语法校验 100% 通过。
+
+
