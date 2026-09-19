@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -87,11 +88,8 @@ func main() {
 
 			// 更新节点容量治理快照 (基于 Event.Channel 状态机)
 			if normEvent.IsChannelState {
-				if normEvent.State == "START" || normEvent.State == "CALLING" {
-					gov.IncrementChannels()
-				} else if normEvent.State == "DESTROY" {
-					gov.DecrementChannels()
-				}
+				sourceMicros, _ := strconv.ParseInt(rawEvent["Event-Date-Timestamp"], 10, 64)
+				gov.ObserveChannel(normEvent.UUID, normEvent.State, sourceMicros)
 			}
 
 			// 发布标准化事件到 NATS (fs.event.{nodeId}.channel / dtmf / record)
@@ -109,13 +107,7 @@ func main() {
 		for range ticker.C {
 			// 探测 FreeSWITCH 是否假死
 			fsAlive := eslClient.Ping()
-			if !fsAlive && gov.GetState() == governance.StateHealthy {
-				gov.SetState(governance.StateOffline)
-				log.Printf("⚠️ [治理警告] FreeSWITCH 探活失败，节点状态置为 OFFLINE")
-			} else if fsAlive && gov.GetState() == governance.StateOffline {
-				gov.SetState(governance.StateHealthy)
-				log.Printf("✅ [治理恢复] FreeSWITCH 探活恢复，节点状态置为 HEALTHY")
-			}
+			gov.ObserveHealth(fsAlive)
 
 			if natsClient != nil {
 				snapshot := gov.GetSnapshot()

@@ -134,7 +134,7 @@ func (c *Client) subscribeEvents() error {
 	}
 
 	// 订阅呼叫生命周期核心事件、录音、分机注册、中继探活及班长监管事件
-	events := "CHANNEL_CREATE CHANNEL_PROGRESS CHANNEL_PROGRESS_MEDIA CHANNEL_ANSWER CHANNEL_PARK CHANNEL_HOLD CHANNEL_UNHOLD CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_HANGUP_COMPLETE CHANNEL_EXECUTE_COMPLETE DTMF RECORD_START RECORD_STOP CUSTOM conference::maintenance CUSTOM eavesdrop::start CUSTOM eavesdrop::stop CUSTOM sofia::register CUSTOM sofia::unregister CUSTOM sofia::expire CUSTOM sofia::gateway_state CUSTOM sofia::gateway_add CUSTOM sofia::gateway_delete"
+	events := "CHANNEL_CREATE CHANNEL_PROGRESS CHANNEL_PROGRESS_MEDIA CHANNEL_ANSWER CHANNEL_PARK CHANNEL_HOLD CHANNEL_UNHOLD CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_HANGUP_COMPLETE CHANNEL_DESTROY CHANNEL_EXECUTE_COMPLETE DTMF RECORD_START RECORD_STOP CUSTOM conference::maintenance CUSTOM eavesdrop::start CUSTOM eavesdrop::stop CUSTOM sofia::register CUSTOM sofia::unregister CUSTOM sofia::expire CUSTOM sofia::gateway_state CUSTOM sofia::gateway_add CUSTOM sofia::gateway_delete"
 	cmd := fmt.Sprintf("event plain %s\n\n", events)
 	_, err := conn.Write([]byte(cmd))
 	return err
