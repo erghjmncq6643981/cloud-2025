@@ -26,7 +26,8 @@ func NewClient(natsURL, nodeID string, dispatcher *rpc.Dispatcher) (*Client, err
 	opts := []nats.Option{
 		nats.Name(fmt.Sprintf("fs-sidecar-%s", nodeID)),
 		nats.ReconnectWait(2 * time.Second),
-		nats.MaxReconnects(-1), // 无限重连
+		nats.MaxReconnects(-1),          // 无限重连
+		nats.RetryOnFailedConnect(true), // 首次离线也保留连接对象与订阅恢复
 		nats.DisconnectErrHandler(func(c *nats.Conn, err error) {
 			log.Printf("🔌 [NATS] 连接断开: %v, 准备重连...", err)
 		}),

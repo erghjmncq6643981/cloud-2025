@@ -51,7 +51,10 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 		if state == "DRAINING" {
 			return NewErrorResponse(req.ID, ErrCodeNodeDraining, "Node is draining and rejecting new calls", nil)
 		}
-		return NewErrorResponse(req.ID, ErrCodeNodeOverloaded, "Node channel capacity reached limit", nil)
+		if state == "OVERLOADED" {
+			return NewErrorResponse(req.ID, ErrCodeNodeOverloaded, "Node channel capacity reached limit", nil)
+		}
+		return NewErrorResponse(req.ID, ErrCodeInternalError, "Node is unavailable for new calls", map[string]string{"node_state": string(state)})
 	}
 
 	var p FNodeDialParams
@@ -165,8 +168,8 @@ type FNodeBridgeParams struct {
 	FlowControl    string `json:"flow_control"`
 	ContinueOnFail bool   `json:"continue_on_fail"`
 	// 兼容字段
-	UUIDA          string `json:"uuidA"`
-	UUIDB          string `json:"uuidB"`
+	UUIDA string `json:"uuidA"`
+	UUIDB string `json:"uuidB"`
 }
 
 func (d *Dispatcher) handleFNodeBridge(req *JsonRpcRequest) *JsonRpcResponse {

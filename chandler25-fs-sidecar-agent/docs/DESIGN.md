@@ -19,7 +19,9 @@ Sidecar 不实现坐席账户、技能组、业务路由、流程版本、客户
 
 2026-09-19 职责确认：自动外呼调度、客户资料、Windows 弹屏业务统一归属 fcc-server；Windows 客户端只执行本机通知和窗口操作。Sidecar 后续补充通道快照、命令幂等/结果查询、事件可靠投递与注册状态能力，实施顺序见 [FCC 分阶段清单](../../../demo-2026/docs/fcc-delivery-plan.md)。这些新增能力尚未整体实现。
 
-本批节点准入仅允许 HEALTHY 且容量未满的节点发起新呼叫，DRAINING/OFFLINE/OVERLOADED/未知状态均拒绝，不修改存量通道。独立 governance 源文件测试通过；完整生产包测试和构建因 go.mod 要求 Go 1.27.1 而本地为 1.25.4 未通过。节点状态自动检测、UUID 计数去重和真实 FreeSWITCH 联调仍待完成。
+节点初始为 OFFLINE，成功读取并应用 FreeSWITCH 通道快照后才允许接单。准入仅允许 HEALTHY 且容量未满；排空期间探活不取消排空，恢复接单不能绕过离线。通道按 UUID 去重计数，双重销毁不会扣减其他通道；终态历史限 65536 条并保留源时间下界防止旧事件复活。每个心跳周期查询 `show channels as json`，校验 row_count、UUID 唯一性，以事件修订号防止旧快照覆盖并发事件。查询失败保留计数并置为不可接单；快照冲突下轮重试，高事件压力可能延迟首次恢复，需真机压测。
+
+ESL 命令超时后关闭旧连接，避免无请求标识的迟到回复误配下一命令；跨连接回复不能相互使用，超时是结果未知，不自动重拨。NATS 首次离线保留客户端和订阅并后台恢复。Go 1.27.1 下全部生产包测试与构建通过，真实 FreeSWITCH 联调待完成。这里恢复的是节点容量，不是 Java Call/Leg 或坐席业务事实；尚无原子拨号容量预占。
 
 ## 2. 运行拓扑
 
@@ -99,7 +101,7 @@ Channel 状态包括 `START`、`CALLING`、`RINGING`、`ANSWERED`、`MEDIA`、`R
 
 当前事件报文没有稳定的源 `event_id`。Java 侧自行生成 ID 不能完成跨重投的协议级去重，这是已知可靠性缺口。NATS Core 事件也不提供持久重放。
 
-Sidecar 与 Java 统一使用 `Event.Recording`，NATS 分类保持 `record`。两侧已有契约测试源码；本机 Go 工具链不可用，尚不能据此宣称录音真实链路已验证。
+Sidecar 与 Java 统一使用 `Event.Recording`，NATS 分类保持 `record`。Go 生产包测试已通过；尚不能据此宣称录音真实链路已验证。
 
 ## 6. 节点治理
 
@@ -146,9 +148,9 @@ Sidecar 还维护扩展表：
 
 ## 9. 故障行为
 
-- ESL 断开：客户端后台重连，节点可能进入 `OFFLINE`。
+- ESL 断开：客户端后台重连，下次快照查询失败使节点进入 `OFFLINE`；查询失败不清空存量话道。
 - PostgreSQL 不可用：启动会记录失败，依赖数据库的接口不可视为健康。
-- NATS 初次连接失败：当前进程继续启动，但没有可用 NATS Client 时不会自动补建完整命令订阅链路。
+- NATS 初次连接失败：客户端使用 RetryOnFailedConnect，保留订阅并后台重连；配置等不可恢复的初始化错误直接终止启动，不伪装已接入总线。
 - NATS 发布失败：事件只记录错误，不会持久重试。
 - HTTP 日志 WebSocket：独立 ESL 日志订阅，客户端需处理断线重连。
 - 进程退出：关闭 ticker、NATS 和 ESL；HTTP server 当前没有独立的优雅 shutdown 编排。

@@ -30,8 +30,9 @@ ALTER TABLE fs_cdr ALTER COLUMN quality_percentage SET DEFAULT '';
 
 - fswitch-web 构建及 Vue/TypeScript 检查通过。
 - 录音事件、旧方法拒绝、响应凭据脱敏有 Go 测试源码。
-- Go 编译和测试未通过环境前置条件：本机 1.25.4，go.mod 要求 1.27.1，工具链下载失败。
-- Java 控制面 Maven 编译和测试被 JDK 17 阻塞，要求 JDK 21。
+- 使用临时官方 Go 1.27.1（SHA-256 校验通过，进程级 GOROOT）完成全部 8 个生产包测试和 Windows 构建；系统默认 Go 与 go.mod 未修改。二进制输出到临时目录，未加入源码库。
+- 新增验证：UUID 重复/乱序/并发事件、双重销毁、终态历史上限、快照恢复及并发屏障、离线/排空/恢复准入、ESL 超时和旧连接响应隔离、NATS 首次离线后的订阅恢复。NATS 使用本机 TCP 协议测试，不是实际 NATS 集群验证；无 C 编译器，未执行 race detector。
+- Java 本批未修改；此前临时 JDK 21 编译及定向测试通过，全量测试被不可用的 NATS 阻断，详见 FCC 实施清单。
 - 未进行真实数据库、NATS、ESL、SIP、录音媒体端到端验证。
 
 ## 仍需治理

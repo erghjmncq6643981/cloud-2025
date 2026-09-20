@@ -97,6 +97,7 @@ type StandardRpcNotification struct {
 
 // NormalizedEventResult 归一化事件结果封装
 type NormalizedEventResult struct {
+	EventID        string
 	Category       string // "channel", "dtmf", "record", "conf", "registration"
 	State          string // 通道状态，如 "START", "CALLING", "DESTROY", 或分机状态 "REGISTERED", "UNREGISTERED"
 	UUID           string
@@ -116,7 +117,7 @@ func NewNormalizer(nodeID string) *Normalizer {
 }
 
 // Normalize 将 FreeSWITCH 原始海量 Header 字典清洗并映射为 FNode 标准规范事件
-func (n *Normalizer) Normalize(raw map[string]string) *NormalizedEventResult {
+func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventResult {
 	rawEventName := raw["Event-Name"]
 	if rawEventName == "" {
 		return nil
@@ -516,9 +517,10 @@ func (n *Normalizer) buildChannelParams(raw map[string]string, uuid, ctrlUUID, s
 		EndEpoch:    endEpoch,
 		Timestamp:   nowMs,
 		Params: map[string]string{
-			"sip_user_agent": raw["variable_sip_user_agent"],
-			"codec":          raw["variable_read_codec"],
-			"dtmf_val":       dtmfVal,
+			"authenticated_extension": raw["variable_sip_auth_username"],
+			"sip_user_agent":          raw["variable_sip_user_agent"],
+			"codec":                   raw["variable_read_codec"],
+			"dtmf_val":                dtmfVal,
 		},
 	}
 }

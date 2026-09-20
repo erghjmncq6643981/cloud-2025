@@ -16,6 +16,16 @@ type Dispatcher struct {
 	handlers map[string]MethodHandler
 	esl      *esl.Client
 	gov      *governance.NodeManager
+	journal  *CommandJournal
+}
+
+// UseCommandJournal enables persistent deduplication before accepting traffic.
+func (d *Dispatcher) UseCommandJournal(directory string) error {
+	journal, err := NewCommandJournal(directory)
+	if err == nil {
+		d.journal = journal
+	}
+	return err
 }
 
 func NewDispatcher(eslClient *esl.Client, govManager *governance.NodeManager) *Dispatcher {
@@ -51,7 +61,12 @@ func (d *Dispatcher) HandleRaw(data []byte) []byte {
 		return out
 	}
 
-	resp := handler(&req)
+	var resp *JsonRpcResponse
+	if d.journal != nil && req.Method != "FNode.ChannelSnapshot" && req.Method != "FNode.Status" && req.Method != "FNode.CommandResult" && req.Method != "FNode.Drain" && req.Method != "FNode.Resume" {
+		resp = d.journal.Execute(&req, handler)
+	} else {
+		resp = handler(&req)
+	}
 	out, _ := json.Marshal(resp)
 	return out
 }
@@ -69,6 +84,18 @@ func (d *Dispatcher) registerMethods() {
 	d.handlers["FNode.Drain"] = d.handleFNodeDrain
 	d.handlers["FNode.Resume"] = d.handleFNodeResume
 	d.handlers["FNode.Status"] = d.handleFNodeStatus
+	d.handlers["FNode.ChannelSnapshot"] = d.handleChannelSnapshot
+	d.handlers["FNode.CommandResult"] = func(req *JsonRpcRequest) *JsonRpcResponse {
+		var params struct {
+			CommandID string `json:"command_id"`
+		}
+		if json.Unmarshal(req.Params, &params) != nil || params.CommandID == "" || d.journal == nil {
+			return NewErrorResponse(req.ID, ErrCodeInvalidParams, "command_id and configured journal required", nil)
+		}
+		response := d.journal.Lookup(params.CommandID)
+		response.ID = req.ID
+		return response
+	}
 
 	log.Printf("[RPC] 已注册 %d 个 FNode 标准控制方法", len(d.handlers))
 }

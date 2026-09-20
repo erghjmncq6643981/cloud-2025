@@ -22,9 +22,16 @@ type Client struct {
 	reader     *bufio.Reader
 	mu         sync.Mutex
 	closed     bool
+	ready      bool
 	eventChan  chan map[string]string
 	cmdReplyMu sync.Mutex
-	cmdReplyCh chan string
+	cmdReplyCh chan apiReply
+}
+
+type apiReply struct {
+	conn net.Conn
+	body string
+	err  error
 }
 
 // NewClient 创建 ESL 客户端
@@ -33,7 +40,7 @@ func NewClient(addr, password string) *Client {
 		addr:       addr,
 		password:   password,
 		eventChan:  make(chan map[string]string, 2048),
-		cmdReplyCh: make(chan string, 1),
+		cmdReplyCh: make(chan apiReply, 1),
 	}
 }
 
@@ -65,7 +72,10 @@ func (c *Client) ConnectAndListen() error {
 		err = c.subscribeEvents()
 		if err != nil {
 			log.Printf("⚠️ [ESL] 订阅事件失败: %v, 断开重连...", err)
-			c.conn.Close()
+			c.mu.Lock()
+			failedConn := c.conn
+			c.mu.Unlock()
+			c.invalidate(failedConn)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -85,7 +95,14 @@ func (c *Client) connect() error {
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		conn.Close()
+		return errors.New("ESL 客户端已关闭")
+	}
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	c.conn = conn
+	c.ready = false
 	c.reader = bufio.NewReader(conn)
 	c.mu.Unlock()
 
@@ -137,6 +154,9 @@ func (c *Client) subscribeEvents() error {
 	events := "CHANNEL_CREATE CHANNEL_PROGRESS CHANNEL_PROGRESS_MEDIA CHANNEL_ANSWER CHANNEL_PARK CHANNEL_HOLD CHANNEL_UNHOLD CHANNEL_BRIDGE CHANNEL_UNBRIDGE CHANNEL_HANGUP CHANNEL_HANGUP_COMPLETE CHANNEL_DESTROY CHANNEL_EXECUTE_COMPLETE DTMF RECORD_START RECORD_STOP CUSTOM conference::maintenance CUSTOM eavesdrop::start CUSTOM eavesdrop::stop CUSTOM sofia::register CUSTOM sofia::unregister CUSTOM sofia::expire CUSTOM sofia::gateway_state CUSTOM sofia::gateway_add CUSTOM sofia::gateway_delete"
 	cmd := fmt.Sprintf("event plain %s\n\n", events)
 	_, err := conn.Write([]byte(cmd))
+	if err == nil {
+		_ = conn.SetDeadline(time.Time{})
+	}
 	return err
 }
 
@@ -147,9 +167,10 @@ func (c *Client) ExecuteAPI(command, args string) (string, error) {
 
 	c.mu.Lock()
 	conn := c.conn
+	ready := c.ready && !c.closed
 	c.mu.Unlock()
 
-	if conn == nil {
+	if conn == nil || !ready {
 		return "", errors.New("FreeSWITCH ESL 离线")
 	}
 
@@ -166,21 +187,61 @@ func (c *Client) ExecuteAPI(command, args string) (string, error) {
 	default:
 	}
 
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_, err := conn.Write([]byte(fullCmd))
+	_ = conn.SetWriteDeadline(time.Time{})
 	if err != nil {
+		c.invalidate(conn)
 		return "", fmt.Errorf("发送指令失败: %w", err)
 	}
 
 	// 等待 api/response
-	select {
-	case reply := <-c.cmdReplyCh:
-		return strings.TrimSpace(reply), nil
-	case <-time.After(5 * time.Second):
-		return "", errors.New("执行 ESL 指令超时 (5s)")
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case reply := <-c.cmdReplyCh:
+			if reply.conn == conn {
+				return strings.TrimSpace(reply.body), reply.err
+			}
+		case <-timer.C:
+			// ESL 响应没有请求 ID。超时后必须丢弃连接，防止迟到响应配给下一命令。
+			c.invalidate(conn)
+			return "", errors.New("执行 ESL 指令超时 (5s)，连接已重置，执行结果未知")
+		}
 	}
 }
 
+// invalidate retires only the failed connection, never a newer reconnect.
+func (c *Client) invalidate(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.conn == conn {
+		c.conn = nil
+		c.ready = false
+	}
+	c.mu.Unlock()
+	_ = conn.Close()
+}
+
 func (c *Client) readLoop() {
+	c.mu.Lock()
+	conn := c.conn
+	if conn == nil || c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.ready = true
+	c.mu.Unlock()
+	defer func() {
+		c.invalidate(conn)
+		select {
+		case c.cmdReplyCh <- apiReply{conn: conn, err: errors.New("ESL 连接中断，执行结果未知")}:
+		default:
+		}
+	}()
 	for {
 		headers, err := c.readHeaders()
 		if err != nil {
@@ -211,7 +272,7 @@ func (c *Client) readLoop() {
 		switch contentType {
 		case "api/response":
 			select {
-			case c.cmdReplyCh <- string(body):
+			case c.cmdReplyCh <- apiReply{conn: conn, body: string(body)}:
 			default:
 			}
 		case "command/reply":

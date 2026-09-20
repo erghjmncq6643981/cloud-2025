@@ -51,19 +51,26 @@ func main() {
 	// 4. 初始化事件清洗器与 JSON-RPC 路由器
 	normalizer := event.NewNormalizer(cfg.NodeID)
 	dispatcher := rpc.NewDispatcher(eslClient, gov)
+	if err := dispatcher.UseCommandJournal(os.Getenv("COMMAND_JOURNAL_DIR")); err != nil {
+		log.Fatalf("[启动] 命令持久目录不可用: %v", err)
+	}
 
 	// 5. 初始化 NATS 客户端
 	natsClient, err := nats.NewClient(cfg.NatsURL, cfg.NodeID, dispatcher)
 	if err != nil {
-		log.Printf("⚠️ [NATS] 初始连接失败: %v, 将在后台持续尝试重连...", err)
+		log.Fatalf("❌ [NATS] 客户端初始化失败: %v", err)
 	} else {
-		log.Printf("✅ [NATS] 成功连接至 NATS 总线: %s", cfg.NatsURL)
+		log.Printf("[NATS] 客户端已初始化，首次连接失败时自动重连并恢复订阅")
 		if err := natsClient.StartListeningRPC(); err != nil {
 			log.Fatalf("❌ [NATS] 监听 RPC 命令失败: %v", err)
 		}
 	}
 
 	// 5.5 初始化并启动管理面 HTTP 同步服务 (分机开户、控制面 API 及终端日志流)
+	eventOutbox, err := nats.StartEventOutbox(os.Getenv("EVENT_OUTBOX_DIR"), natsClient, cfg.NodeID)
+	if err != nil {
+		log.Fatalf("[启动] 事件持久目录不可用: %v", err)
+	}
 	httpServer := api.NewServer(cfg, gov, eslClient, repo)
 	go func() {
 		if err := httpServer.Start(); err != nil {
@@ -93,10 +100,9 @@ func main() {
 			}
 
 			// 发布标准化事件到 NATS (fs.event.{nodeId}.channel / dtmf / record)
-			if natsClient != nil {
-				if err := natsClient.PublishEvent(normEvent); err != nil {
-					log.Printf("⚠️ [NATS] 发布事件失败 [%s]: %v", normEvent.State, err)
-				}
+			if err := eventOutbox.Store(normEvent); err != nil {
+				gov.ObserveHealth(false)
+				log.Fatalf("[事件持久化] 写盘失败，停止接入防止静默丢事件: %v", err)
 			}
 		}
 	}()
@@ -105,9 +111,14 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.HeartbeatIntervalSec) * time.Second)
 	go func() {
 		for range ticker.C {
-			// 探测 FreeSWITCH 是否假死
-			fsAlive := eslClient.Ping()
-			gov.ObserveHealth(fsAlive)
+			// 并发事件修改时丢弃旧快照，下轮重试；查询失败不清空存量话道。
+			revision := gov.ChannelRevision()
+			channels, snapshotErr := eslClient.ChannelUUIDs()
+			if snapshotErr != nil {
+				gov.ObserveHealth(false)
+			} else if gov.ReconcileChannels(revision, channels) {
+				gov.ObserveHealth(true)
+			}
 
 			if natsClient != nil {
 				snapshot := gov.GetSnapshot()
@@ -123,6 +134,7 @@ func main() {
 	log.Printf("🛑 [退出] 收到信号 %v，开始优雅停止 Sidecar Agent...", sig)
 
 	ticker.Stop()
+	eventOutbox.Close()
 	if natsClient != nil {
 		natsClient.Close()
 	}

@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// NodeState describes whether a node can accept new work.
 type NodeState string
 
 const (
@@ -16,31 +17,38 @@ const (
 
 // NodeManager 软交换节点生命周期与治理管理器
 type NodeManager struct {
-	nodeID         string
-	maxChannels    int
-	state          NodeState
-	channels       map[string]bool
-	channelTimes   map[string]int64
-	healthy        bool
-	startTime      time.Time
-	mu             sync.RWMutex
+	nodeID        string
+	maxChannels   int
+	state         NodeState
+	channels      map[string]bool
+	channelTimes  map[string]int64
+	healthy       bool
+	terminalOrder []string
+	terminalNext  int
+	eventFloor    int64
+	revision      uint64
+	startTime     time.Time
+	mu            sync.RWMutex
 }
 
+// NewNodeManager starts offline until an authoritative channel query succeeds.
 func NewNodeManager(nodeID string, maxChannels int) *NodeManager {
 	return &NodeManager{
-		nodeID:      nodeID,
-		maxChannels: maxChannels,
-		state:       StateOffline,
-		channels:    make(map[string]bool),
+		nodeID:       nodeID,
+		maxChannels:  maxChannels,
+		state:        StateOffline,
+		channels:     make(map[string]bool),
 		channelTimes: make(map[string]int64),
-		startTime:   time.Now(),
+		startTime:    time.Now(),
 	}
 }
 
+// NodeID returns the configured FreeSWITCH node identity.
 func (m *NodeManager) NodeID() string {
 	return m.nodeID
 }
 
+// SetState explicitly overrides state; health probes should use ObserveHealth.
 func (m *NodeManager) SetState(s NodeState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -48,6 +56,7 @@ func (m *NodeManager) SetState(s NodeState) {
 	m.healthy = s == StateHealthy
 }
 
+// GetState returns the current administrative/health state.
 func (m *NodeManager) GetState() NodeState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -97,7 +106,7 @@ func (m *NodeManager) IsAcceptingCalls() (bool, NodeState) {
 	}
 
 	active := len(m.channels)
-	if active >= int64(m.maxChannels) {
+	if active >= m.maxChannels {
 		return false, StateOverloaded
 	}
 
@@ -114,6 +123,7 @@ type NodeStatusSnapshot struct {
 	Timestamp      int64     `json:"timestamp"`
 }
 
+// GetSnapshot returns an atomic view of node state and distinct active channels.
 func (m *NodeManager) GetSnapshot() *NodeStatusSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
