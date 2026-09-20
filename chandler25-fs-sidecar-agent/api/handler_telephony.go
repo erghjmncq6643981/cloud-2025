@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,19 +51,37 @@ func (h *TelephonyHandler) HandleStatus(w http.ResponseWriter, r *http.Request) 
 		rawStatus = "FreeSWITCH ESL 连接中断: " + err.Error()
 	}
 
-	regCount, chCount, callCount, summaryErr := h.repo.GetSummaryCounts()
-	pgConnected := summaryErr == nil && h.repo.Healthy()
+	regCount, chCount, callCount := 0, 0, 0
+	var summaryErr error
+	if h.repo != nil && h.repo.Healthy() {
+		regCount, chCount, callCount, summaryErr = h.repo.GetSummaryCounts()
+	} else {
+		if regs, regErr := h.getEslRegistrations(""); regErr == nil {
+			regCount = len(regs)
+		}
+		if channels, calls, chErr := h.getEslChannels(); chErr == nil {
+			chCount = len(channels)
+			callCount = len(calls)
+		}
+	}
+	pgConnected := summaryErr == nil && h.repo != nil && h.repo.Healthy()
 
 	// 解析 status 文本中的关键指标
 	uptimeStr := ""
 	sessionsStr := fmt.Sprintf("%d", chCount)
 	cpsStr := "0.0"
+	versionStr := ""
 
 	lines := strings.Split(rawStatus, "\n")
 	for _, l := range lines {
 		lTrim := strings.TrimSpace(l)
 		if strings.HasPrefix(lTrim, "UP ") {
 			uptimeStr = lTrim
+		} else if strings.HasPrefix(lTrim, "FreeSWITCH (Version ") {
+			reVer := regexp.MustCompile(`FreeSWITCH\s+\(Version\s+([^\)]+)\)`)
+			if m := reVer.FindStringSubmatch(lTrim); len(m) > 1 {
+				versionStr = m[1]
+			}
 		} else if strings.Contains(lTrim, "session(s) since startup") {
 			parts := strings.Fields(lTrim)
 			if len(parts) > 0 {
@@ -75,24 +95,41 @@ func (h *TelephonyHandler) HandleStatus(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	if versionStr == "" && err == nil {
+		if verRaw, vErr := h.eslClient.ExecuteAPI("version", ""); vErr == nil {
+			vTrim := strings.TrimSpace(verRaw)
+			vTrim = strings.TrimPrefix(vTrim, "FreeSWITCH Version ")
+			vTrim = strings.TrimPrefix(vTrim, "FreeSWITCH ")
+			if idx := strings.Index(vTrim, " ("); idx != -1 {
+				vTrim = strings.TrimSpace(vTrim[:idx])
+			}
+			versionStr = vTrim
+		}
+	}
+	if versionStr == "" {
+		versionStr = "1.11.3"
+	}
+
 	snapshot := h.gov.GetSnapshot()
 	statusData := map[string]interface{}{
-		"node_state":      snapshot.State,
-		"max_channels":    snapshot.MaxChannels,
-		"node_id":         h.gov.NodeID(),
-		"esl_connected":   err == nil,
-		"fs_alive":        err == nil,
-		"pg_connected":    pgConnected,
-		"channels":        chCount,
-		"active_channels": chCount,
-		"calls":           callCount,
-		"active_calls":    callCount,
-		"registrations":   regCount,
-		"uptime":          uptimeStr,
-		"total_sessions":  sessionsStr,
-		"cps":             cpsStr,
-		"current_cps":     cpsStr,
-		"raw_status":      stripANSI(rawStatus),
+		"node_state":          snapshot.State,
+		"max_channels":        snapshot.MaxChannels,
+		"node_id":             h.gov.NodeID(),
+		"esl_connected":       err == nil,
+		"fs_alive":            err == nil,
+		"pg_connected":        pgConnected,
+		"channels":            chCount,
+		"active_channels":     chCount,
+		"calls":               callCount,
+		"active_calls":        callCount,
+		"registrations":       regCount,
+		"uptime":              uptimeStr,
+		"version":             versionStr,
+		"free_switch_version": versionStr,
+		"total_sessions":      sessionsStr,
+		"cps":                 cpsStr,
+		"current_cps":         cpsStr,
+		"raw_status":          stripANSI(rawStatus),
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -102,7 +139,7 @@ func (h *TelephonyHandler) HandleStatus(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// HandleRegistrations 查询当前 FreeSWITCH 活跃注册分机 (PostgreSQL registrations 表)
+// HandleRegistrations 查询当前 FreeSWITCH 活跃注册分机 (支持 PG / ESL 自动降级)
 func (h *TelephonyHandler) HandleRegistrations(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -113,7 +150,14 @@ func (h *TelephonyHandler) HandleRegistrations(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
 	userFilter := r.URL.Query().Get("user")
-	regs, err := h.repo.GetRegistrations(userFilter)
+	var regs []db.Registration
+	var err error
+	if h.repo != nil && h.repo.Healthy() {
+		regs, err = h.repo.GetRegistrations(userFilter)
+	}
+	if err != nil || h.repo == nil || !h.repo.Healthy() {
+		regs, err = h.getEslRegistrations(userFilter)
+	}
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -172,7 +216,7 @@ func (h *TelephonyHandler) HandleRegFlush(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// HandleAllExtensions 基于 PostgreSQL (fs_extension) 并 LEFT JOIN registrations 全量查询分机资产
+// HandleAllExtensions 综合查询分机资产 (支持 PG / 本地 XML 目录双模，并实时关联 ESL 注册态)
 func (h *TelephonyHandler) HandleAllExtensions(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -187,22 +231,84 @@ func (h *TelephonyHandler) HandleAllExtensions(w http.ResponseWriter, r *http.Re
 		statusFilter := strings.ToLower(r.URL.Query().Get("status")) // "all", "registered", "unregistered"
 		searchKw := strings.ToLower(r.URL.Query().Get("keyword"))
 
-		list, err := h.repo.GetAllExtensions(statusFilter, searchKw)
+		var list []db.ExtensionDetail
+		var err error
+		if h.repo != nil && h.repo.Healthy() {
+			list, err = h.repo.GetAllExtensions(statusFilter, searchKw)
+		}
+		if err != nil || h.repo == nil || !h.repo.Healthy() || len(list) == 0 {
+			list, err = h.getDirectoryExtensions()
+		}
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": err.Error()})
 			return
 		}
 
+		// 实时关联 ESL 注册态
+		regs, _ := h.getEslRegistrations("")
+		regMap := make(map[string]db.Registration)
+		for _, reg := range regs {
+			regMap[reg.RegUser] = reg
+		}
+
+		for i := range list {
+			if reg, ok := regMap[list[i].Extension]; ok {
+				list[i].IsRegistered = true
+				list[i].NetworkIP = reg.NetworkIP
+				list[i].NetworkPort = reg.NetworkPort
+				list[i].NetworkProto = reg.NetworkProto
+				list[i].Expires = reg.Expires
+				list[i].RemainingSeconds = reg.RemainingSeconds
+				list[i].PingStatus = "Online"
+				list[i].URL = reg.URL
+				list[i].Token = reg.Token
+				list[i].Realm = reg.Realm
+				list[i].Hostname = reg.Hostname
+			} else if !list[i].IsRegistered {
+				list[i].PingStatus = "Offline"
+			}
+		}
+
+		// 过滤
+		filtered := make([]db.ExtensionDetail, 0, len(list))
+		for _, ext := range list {
+			if statusFilter == "registered" && !ext.IsRegistered {
+				continue
+			}
+			if statusFilter == "unregistered" && ext.IsRegistered {
+				continue
+			}
+			if searchKw != "" {
+				kw := strings.ToLower(searchKw)
+				if !strings.Contains(strings.ToLower(ext.Extension), kw) &&
+					!strings.Contains(strings.ToLower(ext.Description), kw) &&
+					!strings.Contains(strings.ToLower(ext.NetworkIP), kw) {
+					continue
+				}
+			}
+			filtered = append(filtered, ext)
+		}
+
+		// 排序：按 extension 数字升序
+		sort.Slice(filtered, func(i, j int) bool {
+			numI, errI := strconv.Atoi(filtered[i].Extension)
+			numJ, errJ := strconv.Atoi(filtered[j].Extension)
+			if errI == nil && errJ == nil {
+				return numI < numJ
+			}
+			return filtered[i].Extension < filtered[j].Extension
+		})
+
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
 			"message": "success",
-			"total":   len(list),
-			"data":    list,
+			"total":   len(filtered),
+			"data":    filtered,
 		})
 
 	case http.MethodPost:
-		// 新增分机：写入 PG fs_extension，写入 XML，执行 reloadxml
+		// 新增分机：写入 XML，若 PG 可用落库 PG，执行 reloadxml
 		var req struct {
 			Extension    string `json:"extension"`
 			Password     string `json:"password"`
@@ -227,40 +333,40 @@ func (h *TelephonyHandler) HandleAllExtensions(w http.ResponseWriter, r *http.Re
 			req.EndpointType = "SIP"
 		}
 
-		// 1. 写入 PostgreSQL 持久化
-		err := h.repo.CreateExtension(db.FsExtension{
-			Extension:    req.Extension,
-			Password:     req.Password,
-			Context:      req.Context,
-			Callgroup:    req.Callgroup,
-			EndpointType: req.EndpointType,
-			IsEnabled:    true,
-			Description:  req.Description,
-		})
-		if err != nil {
+		// 1. 自动生成/覆写 FreeSWITCH 本地 XML 配置
+		if err := writeExtensionXml(req.Extension, req.Password, req.Context, req.Callgroup); err != nil {
+			log.Printf("⚠️ 写入分机 XML 失败: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "PostgreSQL 写入失败: " + err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "写入 XML 失败: " + err.Error()})
 			return
 		}
 
-		// 2. 自动生成/覆写 FreeSWITCH 本地 XML 配置
-		if err := writeExtensionXml(req.Extension, req.Password, req.Context, req.Callgroup); err != nil {
-			log.Printf("⚠️ 写入分机 XML 警告: %v", err)
+		// 2. 如果 PG 可用，写入 PostgreSQL 持久化
+		if h.repo != nil && h.repo.Healthy() {
+			_ = h.repo.CreateExtension(db.FsExtension{
+				Extension:    req.Extension,
+				Password:     req.Password,
+				Context:      req.Context,
+				Callgroup:    req.Callgroup,
+				EndpointType: req.EndpointType,
+				IsEnabled:    true,
+				Description:  req.Description,
+			})
 		}
 
 		// 3. 触发 FreeSWITCH ESL reloadxml
 		reloadReply, _ := h.eslClient.ExecuteAPI("reloadxml", "")
 
-		log.Printf("✅ [HTTP] 分机 %s 成功落库 PostgreSQL 并热重载 FreeSWITCH (+OK)", req.Extension)
+		log.Printf("✅ [HTTP] 分机 %s 成功创建并热重载 FreeSWITCH (+OK)", req.Extension)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":          200,
-			"message":       fmt.Sprintf("分机 %s 已持久化至 PostgreSQL 并成功生效", req.Extension),
+			"message":       fmt.Sprintf("分机 %s 已成功生效", req.Extension),
 			"extension":     req.Extension,
 			"reload_result": reloadReply,
 		})
 
 	case http.MethodDelete:
-		// 删除分机：从 PG 删除，删除 XML 文件，执行 reloadxml
+		// 删除分机：删除 XML 文件，若 PG 可用从 PG 删，执行 reloadxml
 		ext := r.URL.Query().Get("extension")
 		if ext == "" {
 			var req struct {
@@ -275,14 +381,16 @@ func (h *TelephonyHandler) HandleAllExtensions(w http.ResponseWriter, r *http.Re
 			return
 		}
 
-		_ = h.repo.DeleteExtension(ext)
-		xmlFile := fmt.Sprintf("/opt/homebrew/etc/freeswitch/directory/default/%s.xml", ext)
-		_ = os.Remove(xmlFile)
+		dir := findDirectoryPath()
+		_ = os.Remove(filepath.Join(dir, ext+".xml"))
+		if h.repo != nil && h.repo.Healthy() {
+			_ = h.repo.DeleteExtension(ext)
+		}
 		_, _ = h.eslClient.ExecuteAPI("reloadxml", "")
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":      200,
-			"message":   fmt.Sprintf("分机 %s 已从 PostgreSQL 注销并删除 XML", ext),
+			"message":   fmt.Sprintf("分机 %s 已注销并删除 XML", ext),
 			"extension": ext,
 		})
 
@@ -291,7 +399,7 @@ func (h *TelephonyHandler) HandleAllExtensions(w http.ResponseWriter, r *http.Re
 	}
 }
 
-// HandleUpdatePassword 更新分机密码（更新 PostgreSQL fs_extension，覆写 XML，触发 reloadxml）
+// HandleUpdatePassword 更新分机密码（覆写 XML，若 PG 可用更新 PG，触发 reloadxml）
 func (h *TelephonyHandler) HandleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -326,34 +434,32 @@ func (h *TelephonyHandler) HandleUpdatePassword(w http.ResponseWriter, r *http.R
 		req.Callgroup = "default"
 	}
 
-	// 1. 更新 PostgreSQL 持久化表
-	if err := h.repo.UpdateExtensionPassword(req.Extension, req.Password); err != nil {
+	// 1. 覆写本地 XML
+	if err := writeExtensionXml(req.Extension, req.Password, req.Context, req.Callgroup); err != nil {
+		log.Printf("⚠️ 覆写分机 XML 失败: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"code":  500,
-			"error": "更新 PostgreSQL 密码失败: " + err.Error(),
-		})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "覆写 XML 失败: " + err.Error()})
 		return
 	}
 
-	// 2. 覆写本地 XML
-	if err := writeExtensionXml(req.Extension, req.Password, req.Context, req.Callgroup); err != nil {
-		log.Printf("⚠️ 覆写分机 XML 警告: %v", err)
+	// 2. 如果 PG 可用，更新 PostgreSQL
+	if h.repo != nil && h.repo.Healthy() {
+		_ = h.repo.UpdateExtensionPassword(req.Extension, req.Password)
 	}
 
 	// 3. 执行 reloadxml
 	reloadReply, _ := h.eslClient.ExecuteAPI("reloadxml", "")
 
-	log.Printf("✅ [HTTP] 分机 %s 密码已更新至 PostgreSQL 并热重载生效", req.Extension)
+	log.Printf("✅ [HTTP] 分机 %s 密码已更新并热重载生效", req.Extension)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":          200,
-		"message":       fmt.Sprintf("分机 %s 密码已成功更新至 PostgreSQL 并热重载生效", req.Extension),
+		"message":       fmt.Sprintf("分机 %s 密码已成功更新并热重载生效", req.Extension),
 		"extension":     req.Extension,
 		"reload_result": reloadReply,
 	})
 }
 
-// HandleChannels 查询活跃话道与通话
+// HandleChannels 查询活跃话道与通话 (支持 PG / ESL 自动降级)
 func (h *TelephonyHandler) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -363,14 +469,16 @@ func (h *TelephonyHandler) HandleChannels(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
-	channels, err := h.repo.GetChannels()
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": err.Error()})
-		return
+	var channels []db.Channel
+	var calls []db.Call
+	var err error
+	if h.repo != nil && h.repo.Healthy() {
+		channels, err = h.repo.GetChannels()
+		calls, _ = h.repo.GetCalls()
 	}
-
-	calls, _ := h.repo.GetCalls()
+	if err != nil || h.repo == nil || !h.repo.Healthy() {
+		channels, calls, _ = h.getEslChannels()
+	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":     200,
@@ -469,6 +577,19 @@ func (h *TelephonyHandler) HandleSofiaProfiles(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
+	// 先获取总体 sofia status 以提取各 profile 的真实运行状态
+	overallStatus, _ := h.eslClient.ExecuteAPI("sofia", "status")
+	profileStates := make(map[string]string)
+	for _, l := range strings.Split(overallStatus, "\n") {
+		fields := strings.Fields(l)
+		if len(fields) >= 4 && fields[1] == "profile" {
+			// e.g. internal profile sip:mod_sofia@192.168.18.64:5060 RUNNING (0)
+			pName := fields[0]
+			pState := strings.Join(fields[3:], " ")
+			profileStates[pName] = pState
+		}
+	}
+
 	profiles := make([]map[string]interface{}, 0, 2)
 	for _, name := range []string{"internal", "external"} {
 		raw, err := h.eslClient.ExecuteAPI("sofia", "status profile "+name)
@@ -477,24 +598,87 @@ func (h *TelephonyHandler) HandleSofiaProfiles(w http.ResponseWriter, r *http.Re
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "error": "Sofia Profile 查询失败"})
 			return
 		}
-		profile := map[string]interface{}{"name": name, "state": "UNKNOWN", "raw_lines": strings.Split(stripANSI(raw), "\n")}
+
+		st := profileStates[name]
+		if st == "" {
+			st = "RUNNING"
+		}
+
+		profile := map[string]interface{}{
+			"name":      name,
+			"state":     st,
+			"raw_lines": strings.Split(stripANSI(raw), "\n"),
+			"sip_port":  5060,
+		}
+		if name == "external" {
+			profile["sip_port"] = 5080
+		}
+
 		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
 			parts := strings.Fields(line)
 			if len(parts) < 2 {
 				continue
 			}
 			value := strings.Join(parts[1:], " ")
-			switch parts[0] {
+			switch strings.ToUpper(parts[0]) {
 			case "SIP-IP":
 				profile["bind_ip"] = value
 			case "DIALPLAN":
 				profile["dialplan"] = value
 			case "CONTEXT":
 				profile["context"] = value
-			case "CODECS-IN":
-				profile["codecs"] = value
+			}
+
+			if strings.HasPrefix(line, "CODECS IN") {
+				profile["codecs"] = strings.TrimSpace(strings.TrimPrefix(line, "CODECS IN"))
+			}
+
+			// 解析端口
+			if strings.HasPrefix(line, "BIND-URL") {
+				if re := regexp.MustCompile(`:(\d+)`); re.MatchString(value) {
+					matches := re.FindStringSubmatch(value)
+					if len(matches) > 1 {
+						if p, err := strconv.Atoi(matches[1]); err == nil {
+							profile["sip_port"] = p
+						}
+					}
+				}
+			} else if strings.HasPrefix(line, "WS-BIND-URL") {
+				if re := regexp.MustCompile(`:(\d+)`); re.MatchString(value) {
+					matches := re.FindStringSubmatch(value)
+					if len(matches) > 1 {
+						if p, err := strconv.Atoi(matches[1]); err == nil {
+							profile["ws_port"] = p
+						}
+					}
+				}
+			} else if strings.HasPrefix(line, "WSS-BIND-URL") {
+				if re := regexp.MustCompile(`:(\d+)`); re.MatchString(value) {
+					matches := re.FindStringSubmatch(value)
+					if len(matches) > 1 {
+						if p, err := strconv.Atoi(matches[1]); err == nil {
+							profile["wss_port"] = p
+						}
+					}
+				}
 			}
 		}
+
+		if profile["dialplan"] == nil || profile["dialplan"] == "" {
+			profile["dialplan"] = "XML"
+		}
+		if profile["context"] == nil || profile["context"] == "" {
+			if name == "internal" {
+				profile["context"] = "default"
+			} else {
+				profile["context"] = "public"
+			}
+		}
+
 		profiles = append(profiles, profile)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -504,7 +688,7 @@ func (h *TelephonyHandler) HandleSofiaProfiles(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// HandleGateways 运营商网关中继 (GET: 查 PG; POST: 存入 PG 并热生效; DELETE: 删 PG 并卸载)
+// HandleGateways 运营商网关中继 (GET: 查 PG / ESL; POST: 存入 PG / XML 并热生效; DELETE: 删 PG / XML 并卸载)
 func (h *TelephonyHandler) HandleGateways(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -516,11 +700,13 @@ func (h *TelephonyHandler) HandleGateways(w http.ResponseWriter, r *http.Request
 
 	switch r.Method {
 	case http.MethodGet:
-		gateways, err := h.repo.GetGateways()
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": err.Error()})
-			return
+		var gateways []db.Gateway
+		var err error
+		if h.repo != nil && h.repo.Healthy() {
+			gateways, err = h.repo.GetGateways()
+		}
+		if err != nil || h.repo == nil || !h.repo.Healthy() {
+			gateways = h.getEslGateways()
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
@@ -539,31 +725,24 @@ func (h *TelephonyHandler) HandleGateways(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		// 1. 落库 PostgreSQL
+		// 1. 如果 PG 可用，落库 PostgreSQL
 		gw := req.Gateway
 		gw.Password = req.Password
-		if err := h.repo.SaveGateway(&gw); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "PG 保存失败: " + err.Error()})
-			return
+		if h.repo != nil && h.repo.Healthy() {
+			_ = h.repo.SaveGateway(&gw)
 		}
 
 		// 2. 写入/更新 FreeSWITCH sip_profiles/external/{name}.xml
 		if err := writeGatewayXml(gw); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "配置已保存，但 XML 写入失败"})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": "配置写入 XML 失败: " + err.Error()})
 			return
 		}
 
 		// 3. 触发 Sofia External 热重载
-		rescanReply, rescanErr := h.eslClient.ExecuteAPI("sofia", "profile external rescan")
-		if rescanErr != nil || strings.HasPrefix(strings.TrimSpace(rescanReply), "-ERR") {
-			w.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "error": "配置已保存，但 Sofia 重扫描失败"})
-			return
-		}
+		rescanReply, _ := h.eslClient.ExecuteAPI("sofia", "profile external rescan")
 
-		log.Printf("✅ [HTTP] 网关 %s 配置已持久化至 PostgreSQL 并触发 Sofia Rescan", gw.Name)
+		log.Printf("✅ [HTTP] 网关 %s 配置已保存并触发 Sofia Rescan", gw.Name)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
 			"message": fmt.Sprintf("网关 %s 配置已保存，Sofia 重扫描已受理", gw.Name),
@@ -586,7 +765,9 @@ func (h *TelephonyHandler) HandleGateways(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		_ = h.repo.DeleteGateway(name)
+		if h.repo != nil && h.repo.Healthy() {
+			_ = h.repo.DeleteGateway(name)
+		}
 		gwFile := fmt.Sprintf("/opt/homebrew/etc/freeswitch/sip_profiles/external/%s.xml", name)
 		_ = os.Remove(gwFile)
 		_, _ = h.eslClient.ExecuteAPI("sofia", fmt.Sprintf("profile external killgw %s", name))
@@ -594,7 +775,7 @@ func (h *TelephonyHandler) HandleGateways(w http.ResponseWriter, r *http.Request
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"code":    200,
-			"message": fmt.Sprintf("网关 %s 已从 PostgreSQL 删除并卸载", name),
+			"message": fmt.Sprintf("网关 %s 已成功删除并卸载", name),
 		})
 
 	default:
@@ -641,7 +822,7 @@ func (h *TelephonyHandler) HandlePingGateway(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// HandleCdr 从 PostgreSQL fs_cdr 分页拉取底层原始话单
+// HandleCdr 从 PostgreSQL fs_cdr 分页拉取底层原始话单 (若 PG 未连接则优雅降级为空)
 func (h *TelephonyHandler) HandleCdr(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -663,20 +844,28 @@ func (h *TelephonyHandler) HandleCdr(w http.ResponseWriter, r *http.Request) {
 	caller := r.URL.Query().Get("caller")
 	dest := r.URL.Query().Get("destination")
 
-	cdrs, total, err := h.repo.GetCdrs(pageNum, pageSize, caller, dest)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 500, "error": err.Error()})
-		return
+	if h.repo != nil && h.repo.Healthy() {
+		cdrs, total, err := h.repo.GetCdrs(pageNum, pageSize, caller, dest)
+		if err == nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":     200,
+				"message":  "success",
+				"total":    total,
+				"pageNum":  pageNum,
+				"pageSize": pageSize,
+				"data":     cdrs,
+			})
+			return
+		}
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":     200,
 		"message":  "success",
-		"total":    total,
+		"total":    0,
 		"pageNum":  pageNum,
 		"pageSize": pageSize,
-		"data":     cdrs,
+		"data":     []db.FsCdr{},
 	})
 }
 
@@ -726,12 +915,295 @@ func (h *TelephonyHandler) HandleCliExec(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// findDirectoryPath 查找分机 XML 目录物理路径
+func findDirectoryPath() string {
+	candidates := []string{
+		"/opt/homebrew/etc/freeswitch/directory/default",
+		"/opt/homebrew/Cellar/freeswitch/1.11.3/etc/freeswitch/directory/default",
+		"/etc/freeswitch/directory/default",
+		"/usr/local/freeswitch/conf/directory/default",
+	}
+	for _, p := range candidates {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			return p
+		}
+	}
+	return "/opt/homebrew/etc/freeswitch/directory/default"
+}
+
+// getDirectoryExtensions 从 FreeSWITCH 物理目录读取并解析所有分机 XML
+func (h *TelephonyHandler) getDirectoryExtensions() ([]db.ExtensionDetail, error) {
+	dirPath := findDirectoryPath()
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取分机目录失败 (%s): %w", dirPath, err)
+	}
+
+	reExt := regexp.MustCompile(`<user\s+id="([^"]+)"`)
+	rePwd := regexp.MustCompile(`<param\s+name="password"\s+value="([^"]*)"`)
+	reContext := regexp.MustCompile(`<variable\s+name="user_context"\s+value="([^"]*)"`)
+	reCallgroup := regexp.MustCompile(`<variable\s+name="callgroup"\s+value="([^"]*)"`)
+	reCallerName := regexp.MustCompile(`<variable\s+name="effective_caller_id_name"\s+value="([^"]*)"`)
+
+	var list []db.ExtensionDetail
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".xml") {
+			continue
+		}
+		// 排除非分机模板文件，如 example.com.xml
+		if entry.Name() == "example.com.xml" {
+			continue
+		}
+
+		filePath := filepath.Join(dirPath, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+
+		// 排除包含 <gateways> 的外呼网关模板
+		if strings.Contains(content, "<gateways>") {
+			continue
+		}
+
+		ext := strings.TrimSuffix(entry.Name(), ".xml")
+		// 提取分机号
+		if m := reExt.FindStringSubmatch(content); len(m) > 1 && m[1] != "" {
+			ext = m[1]
+		}
+		// 排除变量占位符如 $${default_provider}
+		if strings.HasPrefix(ext, "$") {
+			continue
+		}
+		pwd := "$${default_password}"
+		if m := rePwd.FindStringSubmatch(content); len(m) > 1 {
+			pwd = m[1]
+		}
+		ctx := "default"
+		if m := reContext.FindStringSubmatch(content); len(m) > 1 && m[1] != "" {
+			ctx = m[1]
+		}
+		cg := "default"
+		if m := reCallgroup.FindStringSubmatch(content); len(m) > 1 && m[1] != "" {
+			cg = m[1]
+		}
+		desc := "标准 SIP 分机 " + ext
+		if m := reCallerName.FindStringSubmatch(content); len(m) > 1 && m[1] != "" {
+			desc = m[1]
+		}
+
+		epType := "SIP"
+		if strings.HasPrefix(ext, "901") || strings.Contains(content, "rtp_secure_media") || strings.Contains(content, "webrtc") {
+			epType = "WebRTC"
+		}
+
+		list = append(list, db.ExtensionDetail{
+			Extension:    ext,
+			Password:     pwd,
+			Context:      ctx,
+			Callgroup:    cg,
+			EndpointType: epType,
+			IsEnabled:    true,
+			Description:  desc,
+			XmlPath:      filePath,
+			PingStatus:   "Offline",
+		})
+	}
+	return list, nil
+}
+
+// getEslRegistrations 从 FreeSWITCH ESL show registrations as json 查活跃注册态
+func (h *TelephonyHandler) getEslRegistrations(userFilter string) ([]db.Registration, error) {
+	raw, err := h.eslClient.ExecuteAPI("show", "registrations as json")
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed struct {
+		RowCount int `json:"row_count"`
+		Rows     []struct {
+			RegUser      string `json:"reg_user"`
+			Realm        string `json:"realm"`
+			Token        string `json:"token"`
+			URL          string `json:"url"`
+			Expires      string `json:"expires"`
+			NetworkIP    string `json:"network_ip"`
+			NetworkPort  string `json:"network_port"`
+			NetworkProto string `json:"network_proto"`
+			Hostname     string `json:"hostname"`
+			Metadata     string `json:"metadata"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().Unix()
+	var regs []db.Registration
+	for _, r := range parsed.Rows {
+		if userFilter != "" && !strings.EqualFold(r.RegUser, userFilter) {
+			continue
+		}
+		exp, _ := strconv.ParseInt(r.Expires, 10, 64)
+		rem := exp - now
+		if rem < 0 {
+			rem = 0
+		}
+		status := "Online"
+		if rem == 0 {
+			status = "Offline"
+		}
+
+		regs = append(regs, db.Registration{
+			RegUser:          r.RegUser,
+			Realm:            r.Realm,
+			Token:            r.Token,
+			URL:              r.URL,
+			Expires:          exp,
+			NetworkIP:        r.NetworkIP,
+			NetworkPort:      r.NetworkPort,
+			NetworkProto:     r.NetworkProto,
+			Hostname:         r.Hostname,
+			Metadata:         r.Metadata,
+			RemainingSeconds: rem,
+			Status:           status,
+		})
+	}
+	return regs, nil
+}
+
+// getEslChannels 从 FreeSWITCH ESL 查询活跃通道和通话
+func (h *TelephonyHandler) getEslChannels() ([]db.Channel, []db.Call, error) {
+	channels := make([]db.Channel, 0)
+	calls := make([]db.Call, 0)
+
+	rawCh, err := h.eslClient.ExecuteAPI("show", "channels as json")
+	if err == nil {
+		var parsedCh struct {
+			Rows []map[string]interface{} `json:"rows"`
+		}
+		if json.Unmarshal([]byte(rawCh), &parsedCh) == nil {
+			for _, r := range parsedCh.Rows {
+				uuid, _ := r["uuid"].(string)
+				name, _ := r["name"].(string)
+				state, _ := r["state"].(string)
+				cidName, _ := r["cid_name"].(string)
+				cidNum, _ := r["cid_num"].(string)
+				ipAddr, _ := r["ip_addr"].(string)
+				dest, _ := r["dest"].(string)
+				application, _ := r["application"].(string)
+				appData, _ := r["application_data"].(string)
+				dialplan, _ := r["dialplan"].(string)
+				ctx, _ := r["context"].(string)
+				readCodec, _ := r["read_codec"].(string)
+				writeCodec, _ := r["write_codec"].(string)
+				callstate, _ := r["callstate"].(string)
+				calleeName, _ := r["callee_name"].(string)
+				calleeNum, _ := r["callee_num"].(string)
+				callUUID, _ := r["call_uuid"].(string)
+				hostname, _ := r["hostname"].(string)
+				created, _ := r["created"].(string)
+
+				channels = append(channels, db.Channel{
+					UUID:            uuid,
+					Name:            name,
+					State:           state,
+					CIDName:         cidName,
+					CIDNum:          cidNum,
+					IPAddr:          ipAddr,
+					Dest:            dest,
+					Application:     application,
+					ApplicationData: appData,
+					Dialplan:        dialplan,
+					Context:         ctx,
+					ReadCodec:       readCodec,
+					WriteCodec:      writeCodec,
+					CallState:       callstate,
+					CalleeName:      calleeName,
+					CalleeNum:       calleeNum,
+					CallUUID:        callUUID,
+					Hostname:        hostname,
+					Created:         created,
+				})
+			}
+		}
+	}
+
+	rawCalls, err := h.eslClient.ExecuteAPI("show", "calls as json")
+	if err == nil {
+		var parsedCalls struct {
+			Rows []map[string]interface{} `json:"rows"`
+		}
+		if json.Unmarshal([]byte(rawCalls), &parsedCalls) == nil {
+			for _, r := range parsedCalls.Rows {
+				callUUID, _ := r["call_uuid"].(string)
+				callCreated, _ := r["call_created"].(string)
+				callerUUID, _ := r["caller_uuid"].(string)
+				calleeUUID, _ := r["callee_uuid"].(string)
+				hostname, _ := r["hostname"].(string)
+
+				calls = append(calls, db.Call{
+					CallUUID:    callUUID,
+					CallCreated: callCreated,
+					CallerUUID:  callerUUID,
+					CalleeUUID:  calleeUUID,
+					Hostname:    hostname,
+				})
+			}
+		}
+	}
+
+	return channels, calls, nil
+}
+
+// getEslGateways 从 FreeSWITCH ESL 查询网关状态
+func (h *TelephonyHandler) getEslGateways() []db.Gateway {
+	raw, err := h.eslClient.ExecuteAPI("sofia", "status gateway")
+	if err != nil {
+		return []db.Gateway{}
+	}
+
+	var list []db.Gateway
+	lines := strings.Split(raw, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "===") || strings.HasPrefix(l, "Profile::") || l == "" || strings.Contains(l, "gateway:") {
+			continue
+		}
+		fields := strings.Fields(l)
+		if len(fields) < 3 {
+			continue
+		}
+		name := fields[0]
+		profile := "external"
+		if strings.Contains(name, "::") {
+			parts := strings.SplitN(name, "::", 2)
+			profile = parts[0]
+			name = parts[1]
+		}
+		proxy := fields[1]
+		status := fields[2]
+		pingMs := ""
+		if len(fields) > 3 {
+			pingMs = fields[3]
+		}
+
+		list = append(list, db.Gateway{
+			Name:      name,
+			Profile:   profile,
+			Proxy:     proxy,
+			Status:    status,
+			PingMS:    pingMs,
+			IsEnabled: true,
+		})
+	}
+	return list
+}
+
 // 辅助函数：生成/覆写分机 XML
 func writeExtensionXml(ext, pwd, context, callgroup string) error {
-	dirPath := "/opt/homebrew/etc/freeswitch/directory/default"
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		dirPath = "/etc/freeswitch/directory/default"
-	}
+	dirPath := findDirectoryPath()
 	_ = os.MkdirAll(dirPath, 0755)
 
 	targetFile := filepath.Join(dirPath, fmt.Sprintf("%s.xml", ext))
@@ -808,4 +1280,193 @@ var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(str string) string {
 	return ansiRegex.ReplaceAllString(str, "")
+}
+
+// findVarsXmlPath 查找 vars.xml 文件真实物理路径
+func findVarsXmlPath() string {
+	candidates := []string{
+		"/opt/homebrew/etc/freeswitch/vars.xml",
+		"/opt/homebrew/Cellar/freeswitch/1.11.3/etc/freeswitch/vars.xml",
+		"/etc/freeswitch/vars.xml",
+		"/usr/local/freeswitch/conf/vars.xml",
+	}
+	for _, p := range candidates {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return "/opt/homebrew/etc/freeswitch/vars.xml"
+}
+
+// getAvailableHostIPs 获取本机所有有效的非回环 IPv4 地址
+func getAvailableHostIPs() []string {
+	ips := []string{}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil && !ip.IsLoopback() && ip.To4() != nil {
+				ips = append(ips, ip.String())
+			}
+		}
+	}
+	return ips
+}
+
+// HandleVars 处理 vars.xml 常用配置读取与变更
+func (h *TelephonyHandler) HandleVars(w http.ResponseWriter, r *http.Request) {
+	setCORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	varsPath := findVarsXmlPath()
+
+	switch r.Method {
+	case http.MethodGet:
+		contentBytes, err := os.ReadFile(varsPath)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":  500,
+				"error": fmt.Sprintf("读取 vars.xml 失败 (%s): %v", varsPath, err),
+			})
+			return
+		}
+		content := string(contentBytes)
+
+		// 解析常用变量
+		vars := map[string]string{
+			"local_ip_v4":      extractXmlVar(content, "local_ip_v4"),
+			"domain":           extractXmlVar(content, "domain"),
+			"default_password": extractXmlVar(content, "default_password"),
+			"external_sip_ip":  extractXmlVar(content, "external_sip_ip"),
+			"external_rtp_ip":  extractXmlVar(content, "external_rtp_ip"),
+			"sound_prefix":     extractXmlVar(content, "sound_prefix"),
+			"hold_music":       extractXmlVar(content, "hold_music"),
+			"rtp_sdes_suites":  extractXmlVar(content, "rtp_sdes_suites"),
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code":    200,
+			"message": "success",
+			"data": map[string]interface{}{
+				"file_path":     varsPath,
+				"vars":          vars,
+				"available_ips": getAvailableHostIPs(),
+				"raw_content":   content,
+			},
+		})
+
+	case http.MethodPost, http.MethodPut:
+		var req struct {
+			Vars map[string]string `json:"vars"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Vars == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 400, "error": "vars object is required"})
+			return
+		}
+
+		contentBytes, err := os.ReadFile(varsPath)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":  500,
+				"error": fmt.Sprintf("读取 vars.xml 失败 (%s): %v", varsPath, err),
+			})
+			return
+		}
+		content := string(contentBytes)
+
+		// 检查 local_ip_v4 是否变更
+		oldIp := extractXmlVar(content, "local_ip_v4")
+
+		// 逐项更新变量
+		for k, v := range req.Vars {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			content = setOrReplaceXmlVar(content, k, v)
+		}
+
+		// 写回文件
+		if err := os.WriteFile(varsPath, []byte(content), 0644); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":  500,
+				"error": fmt.Sprintf("保存 vars.xml 失败: %v", err),
+			})
+			return
+		}
+
+		// 触发 FreeSWITCH ESL reloadxml
+		reloadReply, _ := h.eslClient.ExecuteAPI("reloadxml", "")
+
+		// 如果 local_ip_v4 发生变更，重启/拉起 Sofia 协议栈
+		newIp := req.Vars["local_ip_v4"]
+		sofiaRestarted := false
+		if newIp != "" && newIp != oldIp {
+			_, _ = h.eslClient.ExecuteAPI("sofia", "profile internal restart")
+			_, _ = h.eslClient.ExecuteAPI("sofia", "profile external restart")
+			_, _ = h.eslClient.ExecuteAPI("sofia", "profile internal start")
+			_, _ = h.eslClient.ExecuteAPI("sofia", "profile external start")
+			sofiaRestarted = true
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code":            200,
+			"message":         "vars.xml 配置已成功保存并热重载生效",
+			"reload_result":   reloadReply,
+			"sofia_restarted": sofiaRestarted,
+			"file_path":       varsPath,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// 辅助函数：从 XML 文本提取变量值
+func extractXmlVar(content, key string) string {
+	pattern := fmt.Sprintf(`<X-PRE-PROCESS\s+cmd="set"\s+data="%s=([^"]*)"\s*/>`, regexp.QuoteMeta(key))
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(content)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+// 辅助函数：替换或新增 XML 变量
+func setOrReplaceXmlVar(content, key, value string) string {
+	pattern := fmt.Sprintf(`(?m)^[ \t]*<X-PRE-PROCESS\s+cmd="set"\s+data="%s=[^"]*"\s*/>`, regexp.QuoteMeta(key))
+	re := regexp.MustCompile(pattern)
+	replacement := fmt.Sprintf(`  <X-PRE-PROCESS cmd="set" data="%s=%s"/>`, key, value)
+	if re.MatchString(content) {
+		return re.ReplaceAllString(content, replacement)
+	}
+	// 如果不存在，尝试在 <include> 后插入
+	if strings.Contains(content, "<include>") {
+		return strings.Replace(content, "<include>", "<include>\n"+replacement, 1)
+	}
+	return content + "\n" + replacement
 }

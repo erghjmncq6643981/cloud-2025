@@ -75,6 +75,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/telephony/gateways", s.telephony.HandleGateways)
 	s.mux.HandleFunc("/api/v1/telephony/gateways/ping", s.telephony.HandlePingGateway)
 	s.mux.HandleFunc("/api/v1/telephony/cdr", s.telephony.HandleCdr)
+	s.mux.HandleFunc("/api/v1/telephony/vars", s.telephony.HandleVars)
 	s.mux.HandleFunc("/api/v1/telephony/cli/exec", s.telephony.HandleCliExec)
 	s.mux.HandleFunc("/api/v1/telephony/ws/console-logs", s.wsLogs.HandleWS)
 }

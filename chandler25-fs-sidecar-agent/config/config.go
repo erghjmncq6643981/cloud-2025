@@ -30,13 +30,13 @@ func LoadConfig() *Config {
 		NodeID:               getEnv("NODE_ID", hostname),
 		NatsURL:              getEnv("NATS_URL", "nats://127.0.0.1:4222"),
 		FSEslAddr:            getEnv("FS_ESL_ADDR", "127.0.0.1:8021"),
-		FSEslPassword:        os.Getenv("FS_ESL_PASSWORD"),
+		FSEslPassword:        getEnv("FS_ESL_PASSWORD", "ClueCon"),
 		MaxChannels:          getEnvInt("MAX_CHANNELS", 1000),
 		HeartbeatIntervalSec: getEnvInt("HEARTBEAT_INTERVAL_SEC", 3),
 		LogLevel:             getEnv("LOG_LEVEL", "INFO"),
 		HttpPort:             getEnv("HTTP_PORT", "8088"),
 		ScriptPath:           getEnv("EXTENSION_SCRIPT", "/opt/homebrew/etc/freeswitch/scripts/manage_extension.sh"),
-		PostgresDSN:          os.Getenv("PG_DSN"),
+		PostgresDSN:          getEnv("PG_DSN", "postgres://freeswitch:123456@127.0.0.1:5432/freeswitch?sslmode=disable"),
 	}
 }
 
