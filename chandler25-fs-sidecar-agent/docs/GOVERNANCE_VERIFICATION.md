@@ -1,5 +1,7 @@
 # 全新 FCC 契约与验证记录
 
+2026-09-20：Go 8 个生产包及 Windows 二进制构建通过。一次性本机 NATS 2.15.0 + JetStream 已验证 outbox 重建、同毫秒事件接收顺序和 PubAck 后清理；未连接真实 FreeSWITCH/PostgreSQL。新增 ChannelSnapshot 复用完整性校验，查询错误与空话道集合明确区分；Java 的两分钟连续缺失屏障已有单元测试，仍需目标机器验证真实事件与快照竞态。
+
 2026-09-19：不提供旧 call.* / node.* / FNode.Bridge 兼容接口。当前唯一录音方法为 Event.Recording，NATS subject 为 fs.event.{nodeId}.record；wire 字段 ctrl_uuid 表示控制标识，不是业务 callId。
 
 ## 数据与密码

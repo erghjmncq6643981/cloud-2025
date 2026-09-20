@@ -100,3 +100,10 @@ A local NATS instance can be started with the repository `docker-compose.yml`. F
 - An end-to-end result requires real NATS, PostgreSQL, FreeSWITCH ESL, SIP endpoints, and observable media/events.
 
 See [docs/DESIGN.md](./docs/DESIGN.md) for implemented protocol and data boundaries.
+# 运行可靠性配置（2026-09-20）
+
+当前启动必须配置独占持久目录 `COMMAND_JOURNAL_DIR` 与 `EVENT_OUTBOX_DIR`，并预先创建 NATS JetStream `FCC_EVENTS` 流。不得在升级时清空这些目录。
+
+`FNode.ChannelSnapshot` 是非缓存只读查询，成功结果 `data` 包含 `complete: true`、`channel_uuids`、`started_at`、`completed_at`（毫秒）。ESL 查询失败返回错误，不能视为空节点。`FNode.CommandResult` 参数是 `command_id`，仅查询原命令结果，不重复执行未知副作用。
+
+命令 journal 同 ID 不同参数拒绝；意图存在但结果缺失返回 UNKNOWN。当前要求每个节点仅一个 Sidecar 进程使用其目录，尚无多进程文件锁及自动保留清理策略。部署及跨电脑验收见 [FCC 验收指南](../../demo-2026/docs/fcc-cross-machine-acceptance.md)。

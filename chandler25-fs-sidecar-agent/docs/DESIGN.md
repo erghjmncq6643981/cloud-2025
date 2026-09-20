@@ -17,7 +17,7 @@
 
 Sidecar 不实现坐席账户、技能组、业务路由、流程版本、客户资料和业务话单投影。
 
-2026-09-19 职责确认：自动外呼调度、客户资料、Windows 弹屏业务统一归属 fcc-server；Windows 客户端只执行本机通知和窗口操作。Sidecar 后续补充通道快照、命令幂等/结果查询、事件可靠投递与注册状态能力，实施顺序见 [FCC 分阶段清单](../../../demo-2026/docs/fcc-delivery-plan.md)。这些新增能力尚未整体实现。
+2026-09-20：自动外呼调度、客户资料、Windows 弹屏业务统一归属 fcc-server。Sidecar 已提供持久命令日志、FNode.CommandResult、FNode.ChannelSnapshot、稳定事件 ID 与落盘事件队列。部署顺序见 [跨电脑验收](../../../demo-2026/docs/fcc-cross-machine-acceptance.md)。真实 FreeSWITCH 媒体与断线恢复仍需目标环境验证。
 
 节点初始为 OFFLINE，成功读取并应用 FreeSWITCH 通道快照后才允许接单。准入仅允许 HEALTHY 且容量未满；排空期间探活不取消排空，恢复接单不能绕过离线。通道按 UUID 去重计数，双重销毁不会扣减其他通道；终态历史限 65536 条并保留源时间下界防止旧事件复活。每个心跳周期查询 `show channels as json`，校验 row_count、UUID 唯一性，以事件修订号防止旧快照覆盖并发事件。查询失败保留计数并置为不可接单；快照冲突下轮重试，高事件压力可能延迟首次恢复，需真机压测。
 
@@ -99,7 +99,7 @@ Sidecar 向 `fs.event.{nodeId}.{category}` 发布 JSON-RPC Notification：
 
 Channel 状态包括 `START`、`CALLING`、`RINGING`、`ANSWERED`、`MEDIA`、`READY`、`BRIDGE`、`UNBRIDGE` 和 `DESTROY` 的子集，取决于 FreeSWITCH 原始事件。
 
-当前事件报文没有稳定的源 `event_id`。Java 侧自行生成 ID 不能完成跨重投的协议级去重，这是已知可靠性缺口。NATS Core 事件也不提供持久重放。
+事件含稳定 `event_id`：优先使用 nodeId + Core-UUID + Event-Sequence 的 SHA-256，无源序列时哈希完整原事件。事件先写 EVENT_OUTBOX_DIR，再投递 FCC_EVENTS JetStream，只有 PubAck 后删除本地记录。文件序号保持接收顺序，避免同毫秒事件按哈希乱序。Java 使用持久 Inbox 去重；容量、保留期限和处理失败仍需监控，不能声称无限期不丢事件。
 
 Sidecar 与 Java 统一使用 `Event.Recording`，NATS 分类保持 `record`。Go 生产包测试已通过；尚不能据此宣称录音真实链路已验证。
 
@@ -151,7 +151,7 @@ Sidecar 还维护扩展表：
 - ESL 断开：客户端后台重连，下次快照查询失败使节点进入 `OFFLINE`；查询失败不清空存量话道。
 - PostgreSQL 不可用：启动会记录失败，依赖数据库的接口不可视为健康。
 - NATS 初次连接失败：客户端使用 RetryOnFailedConnect，保留订阅并后台重连；配置等不可恢复的初始化错误直接终止启动，不伪装已接入总线。
-- NATS 发布失败：事件只记录错误，不会持久重试。
+- NATS 发布失败：事件保留在节点 outbox 后续重试；本地盘写入失败停止入口，不伪造投递成功。
 - HTTP 日志 WebSocket：独立 ESL 日志订阅，客户端需处理断线重连。
 - 进程退出：关闭 ticker、NATS 和 ESL；HTTP server 当前没有独立的优雅 shutdown 编排。
 
