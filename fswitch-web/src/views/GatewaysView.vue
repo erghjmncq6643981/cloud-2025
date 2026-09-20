@@ -4,15 +4,9 @@
     <div class="bg-[#0F172A] border-b border-slate-800 px-6 py-4 flex items-center justify-between gap-4 shrink-0">
       <div class="flex items-center gap-4 min-w-0">
         <span class="text-lg font-bold text-white tracking-wide shrink-0">网关 (Gateways)</span>
-        <span class="text-sm text-slate-400 hidden xl:inline truncate">运营商 SIP 互联中继，管理对接电信/联通/移动 IMS 专线与第三方 SIP Trunk</span>
+        <span class="text-sm text-slate-400 truncate" title="运营商SIP互联中继">运营商SIP互联中继</span>
       </div>
       <div class="flex items-center gap-3 shrink-0">
-        <button 
-          @click="showGuide = !showGuide"
-          class="bg-slate-800 hover:bg-slate-700 text-cyan-300 text-sm px-4 py-2.5 rounded-xl border border-slate-700 font-semibold transition flex items-center gap-1.5 shrink-0 whitespace-nowrap"
-        >
-          <span>{{ showGuide ? '▲ 收起对接规范' : '📖 展开对接规范与参数解读' }}</span>
-        </button>
         <button 
           @click="openAddModal"
           class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 shadow-lg shadow-cyan-950 shrink-0 whitespace-nowrap"
@@ -26,67 +20,6 @@
     <div class="flex-1 p-6 overflow-y-auto space-y-5">
       <div v-if="stale" class="rounded-lg border border-amber-700/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
         网关列表刷新失败，当前内容为最后一次成功快照。
-      </div>
-      <!-- 运营商对接参数专家解读与规范指南 (可展开/折叠面板) -->
-      <div v-if="showGuide" class="bg-[#131C31] border border-cyan-900/60 rounded-2xl p-5 shadow-xl space-y-4">
-        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-          <div class="flex items-center gap-2 text-cyan-400 font-bold text-base">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            <span>运营商 SIP 网关对接 4 大核心维度与参数规范指南</span>
-          </div>
-          <span class="text-xs text-slate-400 font-mono">FreeSWITCH Sofia-SIP (external.xml)</span>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 text-xs font-sans">
-          <!-- 1. 信令连接与模式 -->
-          <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
-            <div class="font-bold text-amber-300 text-sm flex items-center gap-1.5">
-              <span>① 远端连接与注册模式</span>
-            </div>
-            <p class="text-slate-300 leading-relaxed">
-              <b class="text-white">proxy:</b> 运营商远端 SBC/IMS 代理地址与端口（如 <code class="text-cyan-300">116.228.x.x:5060</code>）。<br>
-              <b class="text-white">register:</b> <span class="text-emerald-400">true</span> 表示账号密码动态注册（小微中继）；<span class="text-amber-400">false</span> 表示 IP 白名单直通模式（企业专线主流，只验源 IP 免注册）。<br>
-              <b class="text-white">ping:</b> 自动向远端发送 SIP OPTIONS 心跳探活周期（建议 25s），探活超时触发熔断。
-            </p>
-          </div>
-
-          <!-- 2. 鉴权认证与主叫身份 -->
-          <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
-            <div class="font-bold text-cyan-300 text-sm flex items-center gap-1.5">
-              <span>② 鉴权与主叫身份 (From)</span>
-            </div>
-            <p class="text-slate-300 leading-relaxed">
-              <b class="text-white">username / password:</b> 运营商下发的 SIP 中继账号与鉴权密码。<br>
-              <b class="text-white">from-domain:</b> From 头归属域名（如 <code class="text-cyan-300">ims.chinaunicom.cn</code>，运营商防虚假呼叫强校验核心）。<br>
-              <b class="text-white">caller-id-in-from:</b> 是否将真实外呼主叫号强制写入 From 头（绝大多数运营商要求开启，否则按中继总机出局）。
-            </p>
-          </div>
-
-          <!-- 3. 路由隔离与安全 -->
-          <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
-            <div class="font-bold text-indigo-300 text-sm flex items-center gap-1.5">
-              <span>③ 路由上下文与安全隔离</span>
-            </div>
-            <p class="text-slate-300 leading-relaxed">
-              <b class="text-white">context:</b> 呼入命中的 Dialplan 上下文（默认为 <code class="text-indigo-300">public</code> 或 <code class="text-indigo-300">from-trunk</code>）。<br>
-              <b class="text-white">安全隔离:</b> 严禁将网关 context 设为 default！隔离可以防止外部未经鉴权的来电直接拨打内部分机或越权盗打二次外呼。<br>
-              <b class="text-white">extension:</b> 呼入默认路由目的地（如 <code class="text-slate-200">auto_to_user</code> 或引至 IVR）。
-            </p>
-          </div>
-
-          <!-- 4. 媒体流与按键特征 -->
-          <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
-            <div class="font-bold text-emerald-300 text-sm flex items-center gap-1.5">
-              <span>④ 媒体编解码与 DTMF</span>
-            </div>
-            <p class="text-slate-300 leading-relaxed">
-              <b class="text-white">dtmf_type:</b> 首选 <code class="text-emerald-400">rfc2833</code>（带外 RTP Payload 101，电信级最稳定防丢按键）；政企可选 <code class="text-slate-200">info</code>；带内模拟选 <code class="text-slate-200">inband</code>。<br>
-              <b class="text-white">codecs:</b> 语音编码协商优先级。国内固话首选 <code class="text-emerald-400">PCMA (G.711a)</code>；跨省长途或带宽受限专线可优先选 <code class="text-cyan-300">G729</code> 压缩带宽。
-            </p>
-          </div>
-        </div>
       </div>
 
       <!-- 网关数据表 -->
@@ -320,7 +253,6 @@ const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
 
-const showGuide = ref(true)
 const showModal = ref(false)
 const isEditing = ref(false)
 
