@@ -111,8 +111,10 @@ export interface Gateway {
 
 export interface ExtensionItem {
   extension: string
+  password?: string
   context: string
   callgroup: string
+  xml_path?: string
   is_registered: boolean
   network_ip: string
   network_port: string
@@ -159,7 +161,7 @@ export const telephonyApi = {
       fs_alive: isEslAlive,
       pg_connected: raw.pg_connected === true,
       uptime: raw.uptime || '',
-      version: raw.free_switch_version || '',
+      version: raw.version || raw.free_switch_version || '',
       total_sessions: Number(raw.total_sessions) || 0,
       active_sessions: raw.active_calls ?? 0,
       max_sessions: Number(raw.max_channels) || 0,
@@ -264,7 +266,34 @@ export const telephonyApi = {
 
   async reloadXml(): Promise<string> {
     return this.executeCli('reloadxml')
+  },
+
+  async getVars(): Promise<VarsConfig> {
+    const res = await client.get('/telephony/vars')
+    return res.data.data
+  },
+
+  async updateVars(vars: Record<string, string>): Promise<any> {
+    const res = await client.post('/telephony/vars', { vars })
+    return res.data
   }
+}
+
+export interface VarsConfig {
+  file_path: string
+  vars: {
+    local_ip_v4: string
+    domain: string
+    default_password: string
+    external_sip_ip: string
+    external_rtp_ip: string
+    sound_prefix: string
+    hold_music: string
+    rtp_sdes_suites?: string
+    [key: string]: string | undefined
+  }
+  available_ips: string[]
+  raw_content: string
 }
 
 function assertDialTarget(value: string): void {

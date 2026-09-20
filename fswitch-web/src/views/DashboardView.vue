@@ -32,11 +32,13 @@
       </section>
 
       <section class="rounded-lg border border-slate-800 bg-[#131C31] p-5">
-        <div class="text-sm text-slate-400">PostgreSQL</div>
-        <div class="mt-3 font-mono text-2xl font-bold" :class="status.pg_connected && !stale ? 'text-emerald-400' : 'text-amber-300'">
-          {{ stale ? 'STALE' : status.pg_connected ? 'CONNECTED' : 'OFFLINE' }}
+        <div class="text-sm text-slate-400">元数据与存储引擎</div>
+        <div class="mt-3 font-mono text-2xl font-bold" :class="stale ? 'text-amber-300' : status.pg_connected ? 'text-emerald-400' : 'text-cyan-400'">
+          {{ stale ? 'STALE' : status.pg_connected ? 'POSTGRESQL' : 'NATIVE (XML/ESL)' }}
         </div>
-        <div class="mt-3 truncate text-sm text-slate-400" :title="status.node_id || ''">节点：{{ status.node_id || '未提供' }}</div>
+        <div class="mt-3 truncate text-sm text-slate-400" :title="status.node_id || ''">
+          {{ status.pg_connected ? `节点：${status.node_id || '未提供'}` : '运行模式：原生物理热重载' }}
+        </div>
       </section>
     </div>
 

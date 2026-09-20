@@ -129,11 +129,12 @@
           <thead class="bg-slate-900/95 text-slate-300 border-b border-slate-800 sticky top-0 font-bold text-sm uppercase tracking-wider whitespace-nowrap">
             <tr>
               <th class="py-4 px-6 w-28">分机号</th>
-              <th class="py-4 px-6 w-52">注册状态</th>
-              <th class="py-4 px-6 min-w-[220px]">网络终端 (User-Agent)</th>
-              <th class="py-4 px-6 w-60">网络地址 (IP:Port)</th>
-              <th class="py-4 px-6 w-44">Context / 呼叫组</th>
-              <th class="py-4 px-6 text-right w-44 pr-6">操作</th>
+              <th class="py-4 px-6 w-48">注册状态</th>
+              <th class="py-4 px-6 w-56">SIP 认证密码</th>
+              <th class="py-4 px-6 min-w-[200px]">网络终端 (User-Agent)</th>
+              <th class="py-4 px-6 w-56">网络地址 (IP:Port)</th>
+              <th class="py-4 px-6 w-40">Context / 呼叫组</th>
+              <th class="py-4 px-6 text-right w-52 pr-6">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-800/80 font-sans whitespace-nowrap">
@@ -161,12 +162,44 @@
                 </span>
               </td>
 
+              <!-- SIP 认证密码 (支持查看与明密文切换) -->
+              <td class="py-4 px-6">
+                <div class="flex items-center gap-2.5 font-mono">
+                  <span class="text-base font-bold" :class="revealedPasswords[ext.extension] ? 'text-amber-300' : 'text-slate-400'">
+                    {{ revealedPasswords[ext.extension] ? (ext.password || '$${default_password}') : '••••••••' }}
+                  </span>
+                  <!-- 密码显隐切换按钮 -->
+                  <button 
+                    @click="togglePassword(ext.extension)"
+                    class="text-slate-400 hover:text-cyan-300 text-sm p-1 rounded hover:bg-slate-800 transition cursor-pointer"
+                    :title="revealedPasswords[ext.extension] ? '隐藏密码' : '显示密码'"
+                  >
+                    <svg v-if="revealedPasswords[ext.extension]" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                      <line x1="1" y1="1" x2="23" y2="23"/>
+                    </svg>
+                    <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                    </svg>
+                  </button>
+                  <!-- 快捷修改密码按钮 -->
+                  <button 
+                    @click="openEditPassword(ext)"
+                    class="text-xs bg-slate-800 hover:bg-cyan-950 border border-slate-700 hover:border-cyan-700 text-cyan-400 px-2.5 py-1 rounded font-sans font-medium transition cursor-pointer"
+                  >
+                    修改
+                  </button>
+                </div>
+              </td>
+
               <!-- 终端 -->
               <td class="py-4 px-6">
                 <div class="text-white font-bold text-base">
                   {{ ext.is_registered ? (ext.user_agent || 'SIP Terminal') : '等待话机接入' }}
                 </div>
-                <button @click="openEditPassword(ext)" class="pt-1 text-xs text-cyan-400 hover:underline">重置认证密码</button>
+                <div class="text-xs text-slate-400 font-mono truncate max-w-xs pt-0.5">
+                  {{ ext.xml_path || `conf/directory/default/${ext.extension}.xml` }}
+                </div>
               </td>
 
               <!-- 网络地址 -->
@@ -189,19 +222,20 @@
 
               <!-- 操作 -->
               <td class="py-4 px-6 text-right space-x-3 text-sm font-semibold">
-                <button @click="openDetail(ext)" class="text-cyan-400 hover:text-cyan-300 hover:underline">详情</button>
-                <button @click="$emit('dial-ext', ext.extension)" class="text-emerald-400 hover:text-emerald-300 hover:underline">拨打</button>
+                <button @click="openDetail(ext)" class="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer">详情</button>
+                <button @click="openEditPassword(ext)" class="text-amber-400 hover:text-amber-300 hover:underline cursor-pointer">修改密码</button>
+                <button @click="$emit('dial-ext', ext.extension)" class="text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer">拨打</button>
                 <button 
                   v-if="ext.is_registered" 
                   @click="$emit('flush-reg', ext.extension)" 
-                  class="text-rose-400 hover:text-rose-300 hover:underline"
+                  class="text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
                 >
                   踢除
                 </button>
               </td>
             </tr>
             <tr v-if="filteredExtensions.length === 0">
-              <td colspan="6" class="text-center py-16 text-slate-500 text-base font-medium">
+              <td colspan="7" class="text-center py-16 text-slate-500 text-base font-medium">
                 无匹配的分机账户记录
               </td>
             </tr>
@@ -296,16 +330,34 @@
         </div>
         <div class="px-6 space-y-4 text-sm">
           <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 text-xs text-slate-300 font-mono space-y-1">
+            <div>分机号码: <span class="text-cyan-400 font-bold">{{ editingExt.extension }}</span></div>
             <div>当前 Context: <span class="text-slate-200">{{ editingExt.context }}</span></div>
+            <div>配置文件: <span class="text-cyan-300">{{ editingExt.xml_path || `conf/directory/default/${editingExt.extension}.xml` }}</span></div>
           </div>
           <div>
             <label class="block text-slate-400 mb-1.5 font-semibold">新 SIP 认证密码 (Password) *</label>
-            <input 
-              v-model="editPasswordInput" 
-              type="password"
-              placeholder="输入新密码..." 
-              class="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-4 py-2.5 outline-none font-mono text-base font-bold focus:border-cyan-500"
-            >
+            <div class="relative">
+              <input 
+                v-model="editPasswordInput" 
+                :type="showEditPassword ? 'text' : 'password'"
+                placeholder="输入新密码..." 
+                class="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-4 py-2.5 outline-none font-mono text-base font-bold focus:border-cyan-500 pr-10"
+              >
+              <button 
+                type="button"
+                @click="showEditPassword = !showEditPassword"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                :title="showEditPassword ? '隐藏密码' : '显示密码'"
+              >
+                <svg v-if="showEditPassword" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                  <line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+                <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="text-xs text-slate-400 leading-relaxed bg-cyan-950/30 border border-cyan-900/50 p-3 rounded-xl">
             提交后 Sidecar 会更新分机配置并请求 FreeSWITCH 重新加载。最终注册结果以新的注册事件为准。
@@ -368,6 +420,17 @@
             <div class="flex justify-between"><span class="text-slate-400">Contact URI:</span><span class="text-slate-400 truncate text-xs">{{ selectedExt.url || '-' }}</span></div>
           </div>
           <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-1.5 text-slate-300">
+            <div class="flex justify-between items-center">
+              <span class="text-slate-400">SIP 认证密码:</span>
+              <div class="flex items-center gap-2">
+                <span class="text-amber-300 font-bold">{{ revealedPasswords[selectedExt.extension] ? (selectedExt.password || '$${default_password}') : '••••••••' }}</span>
+                <button @click="togglePassword(selectedExt.extension)" class="text-slate-400 hover:text-white text-xs">
+                  {{ revealedPasswords[selectedExt.extension] ? '隐藏' : '显示' }}
+                </button>
+                <button @click="openEditPassword(selectedExt)" class="text-cyan-400 hover:text-cyan-300 text-xs ml-1">修改</button>
+              </div>
+            </div>
+            <div class="flex justify-between"><span class="text-slate-400">XML 配置路径:</span><span class="text-cyan-300 text-xs truncate max-w-xs">{{ selectedExt.xml_path || `conf/directory/default/${selectedExt.extension}.xml` }}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">呼叫 Context:</span><span>{{ selectedExt.context }}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">呼叫组:</span><span>{{ selectedExt.callgroup }}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Call-ID Token:</span><span class="text-slate-400 text-xs">{{ selectedExt.token || '-' }}</span></div>
@@ -439,8 +502,12 @@ function handleReset() {
 const selectedExt = ref<ExtensionItem | null>(null)
 const editingExt = ref<ExtensionItem | null>(null)
 const editPasswordInput = ref('')
+const showEditPassword = ref(false)
+const revealedPasswords = ref<Record<string, boolean>>({})
 
-const showCreateModal = ref(false)
+function togglePassword(ext: string) {
+  revealedPasswords.value[ext] = !revealedPasswords.value[ext]
+}
 const newExt = ref({
   extension: '',
   password: '',
@@ -570,7 +637,8 @@ function openDetail(ext: ExtensionItem) {
 
 function openEditPassword(ext: ExtensionItem) {
   editingExt.value = ext
-  editPasswordInput.value = ''
+  editPasswordInput.value = ext.password && ext.password !== '$${default_password}' ? ext.password : ''
+  showEditPassword.value = false
 }
 
 async function submitUpdatePassword() {

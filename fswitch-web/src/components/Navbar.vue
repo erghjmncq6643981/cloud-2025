@@ -33,9 +33,9 @@
         </div>
         <span class="text-slate-700">|</span>
         <div class="flex items-center gap-1.5 shrink-0">
-          <span class="text-slate-400">PG 核心库:</span>
-          <span :class="status.pg_connected ? 'text-emerald-400' : 'text-red-400'" class="font-mono font-semibold text-sm">
-            {{ status.pg_connected ? 'freeswitch (OK)' : 'OFFLINE' }}
+          <span class="text-slate-400">存储模式:</span>
+          <span :class="status.pg_connected ? 'text-emerald-400' : 'text-cyan-400'" class="font-mono font-semibold text-sm">
+            {{ status.pg_connected ? 'PostgreSQL (OK)' : 'FreeSWITCH 原生 (XML/ESL)' }}
           </span>
         </div>
       </div>
