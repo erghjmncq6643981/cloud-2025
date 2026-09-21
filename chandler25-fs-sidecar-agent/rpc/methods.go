@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -107,7 +108,7 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 	}
 
 	if uuid == "" {
-		uuid = fmt.Sprintf("call-%d", time.Now().UnixNano())
+		uuid = newChannelUUID()
 	}
 
 	var vars []string
@@ -158,6 +159,27 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 	}
 
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), uuid, p.CtrlUUID, 200, "OK")
+}
+
+// newChannelUUID 生成不携带业务前缀的 FreeSWITCH 话道 UUID。
+func newChannelUUID() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		fallback := time.Now().UnixNano()
+		for index := range bytes {
+			bytes[index] = byte(fallback >> ((index % 8) * 8))
+		}
+	}
+	bytes[6] = (bytes[6] & 0x0f) | 0x40
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%x-%x-%x-%x-%x",
+		bytes[0:4],
+		bytes[4:6],
+		bytes[6:8],
+		bytes[8:10],
+		bytes[10:16],
+	)
 }
 
 // --- 2. FNode.ChannelBridge (话道桥接) ---

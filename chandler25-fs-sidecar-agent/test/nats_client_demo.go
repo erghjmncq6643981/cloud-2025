@@ -47,7 +47,7 @@ func main() {
 		ctrlUUID := fmt.Sprintf("ctrl-%d", time.Now().Unix())
 		params := map[string]interface{}{
 			"ctrl_uuid": ctrlUUID,
-			"uuid":      fmt.Sprintf("call-%d", time.Now().Unix()),
+			"uuid":      fmt.Sprintf("%d", time.Now().UnixNano()),
 			"destination": map[string]interface{}{
 				"call_params": []map[string]interface{}{
 					{

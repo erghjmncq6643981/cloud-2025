@@ -7,16 +7,17 @@ import (
 
 // Config 软交换一体化节点配置
 type Config struct {
-	NodeID               string
-	NatsURL              string
-	FSEslAddr            string
-	FSEslPassword        string
-	MaxChannels          int
-	HeartbeatIntervalSec int
-	LogLevel             string
-	HttpPort             string
-	ScriptPath           string
-	PostgresDSN          string
+	NodeID                 string
+	NatsURL                string
+	FSEslAddr              string
+	FSEslPassword          string
+	MaxChannels            int
+	HeartbeatIntervalSec   int
+	LogLevel               string
+	HttpPort               string
+	ScriptPath             string
+	PostgresDSN            string
+	DispatchIngressEnabled bool
 }
 
 // LoadConfig 从环境变量加载配置，带生产级默认值
@@ -27,17 +28,27 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		NodeID:               getEnv("NODE_ID", hostname),
-		NatsURL:              getEnv("NATS_URL", "nats://127.0.0.1:4222"),
-		FSEslAddr:            getEnv("FS_ESL_ADDR", "127.0.0.1:8021"),
-		FSEslPassword:        getEnv("FS_ESL_PASSWORD", "ClueCon"),
-		MaxChannels:          getEnvInt("MAX_CHANNELS", 1000),
-		HeartbeatIntervalSec: getEnvInt("HEARTBEAT_INTERVAL_SEC", 3),
-		LogLevel:             getEnv("LOG_LEVEL", "INFO"),
-		HttpPort:             getEnv("HTTP_PORT", "8088"),
-		ScriptPath:           getEnv("EXTENSION_SCRIPT", "/opt/homebrew/etc/freeswitch/scripts/manage_extension.sh"),
-		PostgresDSN:          getEnv("PG_DSN", "postgres://freeswitch:123456@127.0.0.1:5432/freeswitch?sslmode=disable"),
+		NodeID:                 getEnv("NODE_ID", hostname),
+		NatsURL:                getEnv("NATS_URL", "nats://127.0.0.1:4222"),
+		FSEslAddr:              getEnv("FS_ESL_ADDR", "127.0.0.1:8021"),
+		FSEslPassword:          getEnv("FS_ESL_PASSWORD", "ClueCon"),
+		MaxChannels:            getEnvInt("MAX_CHANNELS", 1000),
+		HeartbeatIntervalSec:   getEnvInt("HEARTBEAT_INTERVAL_SEC", 3),
+		LogLevel:               getEnv("LOG_LEVEL", "INFO"),
+		HttpPort:               getEnv("HTTP_PORT", "8088"),
+		ScriptPath:             getEnv("EXTENSION_SCRIPT", "/opt/homebrew/etc/freeswitch/scripts/manage_extension.sh"),
+		PostgresDSN:            getEnv("PG_DSN", "postgres://freeswitch:123456@127.0.0.1:5432/freeswitch?sslmode=disable"),
+		DispatchIngressEnabled: getEnvBool("DISPATCH_INGRESS_ENABLED", true),
 	}
+}
+
+func getEnvBool(key string, defaultVal bool) bool {
+	if val := os.Getenv(key); val != "" {
+		if boolVal, err := strconv.ParseBool(val); err == nil {
+			return boolVal
+		}
+	}
+	return defaultVal
 }
 
 func getEnv(key, defaultVal string) string {

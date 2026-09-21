@@ -6,7 +6,7 @@ FreeSWITCH node-side gateway implemented in Go. One Sidecar is deployed with one
 
 - Maintain the local inbound ESL connection to FreeSWITCH.
 - Normalize selected FreeSWITCH events into FCC JSON-RPC notifications.
-- Subscribe to node-scoped NATS request/reply commands.
+- Subscribe to the logical dispatch command entry and the node-scoped internal request/reply command.
 - Publish node heartbeat and capacity state.
 - Enforce basic node state such as `HEALTHY`, `OFFLINE`, and `DRAINING`.
 - Expose HTTP/WebSocket operations endpoints on `8088`.
@@ -36,7 +36,8 @@ fcc-admin :8089 -------- selected admin HTTP --^
 
 | Subject | Direction | Purpose |
 | --- | --- | --- |
-| `fs.cmd.{nodeId}` | Java to Sidecar | JSON-RPC 2.0 commands |
+| `fs.cmd.dispatch` | Java to Sidecar Coordinator | logical JSON-RPC 2.0 commands; node is selected below the FCC boundary |
+| `fs.cmd.{nodeId}` | Coordinator to Sidecar | internal JSON-RPC 2.0 commands |
 | `fs.event.{nodeId}.channel` | Sidecar to Java | normalized channel lifecycle |
 | `fs.event.{nodeId}.dtmf` | Sidecar to Java | DTMF events |
 | `fs.event.{nodeId}.record` | Sidecar to Java | recording events |
@@ -45,7 +46,7 @@ fcc-admin :8089 -------- selected admin HTTP --^
 
 Implemented RPC methods include `FNode.Dial`, `FNode.ChannelBridge`, `FNode.ReadDTMF`, `FNode.Play`, `FNode.Record`, `FNode.Hangup`, `FNode.Transfer`, `FNode.NativeAPI`, `FNode.Drain`, `FNode.Resume`, and `FNode.Status`. Only these canonical names are registered; old `call.*`, `node.*`, and `FNode.Bridge` aliases are rejected.
 
-The `nodeId` must exactly match the Java `FCC_DEFAULT_NODE_ID`; otherwise commands are sent to an unconsumed subject.
+Java no longer configures or sends a `nodeId`. In the current single-node mode, the dispatch ingress executes locally. A multi-node deployment requires a Coordinator/ownership registry to route `channel_uuid` commands and new `Dial` requests before using the internal `fs.cmd.{nodeId}` subject.
 
 ## HTTP and WebSocket API
 
@@ -78,6 +79,7 @@ The CLI, gateway, extension, registration, and channel mutation endpoints are pr
 | `EXTENSION_SCRIPT` | extension lifecycle script |
 | `PG_DSN` | PostgreSQL connection string |
 | `LOG_LEVEL` | logging level |
+| `DISPATCH_INGRESS_ENABLED` | enable the local single-node `fs.cmd.dispatch` ingress; set false on nodes behind a real Coordinator |
 
 Production secrets must be supplied by environment/secret management and must not be committed or logged.
 

@@ -64,6 +64,13 @@ func main() {
 		if err := natsClient.StartListeningRPC(); err != nil {
 			log.Fatalf("❌ [NATS] 监听 RPC 命令失败: %v", err)
 		}
+		if cfg.DispatchIngressEnabled {
+			if err := natsClient.StartListeningDispatchRPC(); err != nil {
+				log.Fatalf("❌ [NATS] 监听逻辑 RPC 命令失败: %v", err)
+			}
+		} else {
+			log.Printf("[NATS] 已关闭逻辑命令入口，本节点仅作为内部 worker")
+		}
 	}
 
 	// 5.5 初始化并启动管理面 HTTP 同步服务 (分机开户、控制面 API 及终端日志流)

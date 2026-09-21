@@ -28,7 +28,7 @@ ESL 命令超时后关闭旧连接，避免无请求标识的迟到回复误配�
 ```text
                          NATS
                     /             \
-        fs.cmd.{nodeId}            fs.event.* / fs.status.*
+        fs.cmd.dispatch            fs.event.* / fs.status.*
                  |                         |
                  v                         v
 fcc-server --> Sidecar :8088 <---------- Java control plane
@@ -45,7 +45,9 @@ fswitch-web :8008 --> Sidecar HTTP/WebSocket
 fcc-admin :8089 ----> selected Sidecar management HTTP
 ```
 
-`NODE_ID` 是命令路由和事件归属的唯一节点标识，必须与 Java 侧目标节点一致。
+`NODE_ID` 是 Sidecar 事件、心跳和内部命令归属的节点标识。Java 业务不再提供目标节点；逻辑命令先进入 `fs.cmd.dispatch`。当前单节点模式由本地 Dispatcher 直接执行，多节点需要独立 Coordinator 依据 Channel ownership、容量和策略转发到 `fs.cmd.{nodeId}`。
+
+单节点测试默认开启 `DISPATCH_INGRESS_ENABLED=true`。部署多个 Sidecar 时，只有真正的 Coordinator/单节点 ingress 才能开启该入口，其余 worker 必须设置为 `false`，避免多个节点竞争同一逻辑命令而误执行。
 
 ## 3. 进程组件
 
@@ -63,7 +65,7 @@ fcc-admin :8089 ----> selected Sidecar management HTTP
 
 ## 4. FCC 命令协议
 
-命令使用 JSON-RPC 2.0，经 `fs.cmd.{nodeId}` 请求/应答。
+命令使用 JSON-RPC 2.0。Java 业务经 `fs.cmd.dispatch` 请求/应答；`fs.cmd.{nodeId}` 仅是 Sidecar 内部或过渡入口。
 
 当前方法：
 
