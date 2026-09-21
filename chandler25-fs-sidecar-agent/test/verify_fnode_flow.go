@@ -25,7 +25,7 @@ func main() {
 
 	nodeID := "qiandingjundeMacBook-Pro.local"
 	ctrlUUID := fmt.Sprintf("ctrl-flow-%d", time.Now().Unix())
-	callUUID := fmt.Sprintf("call-flow-%d", time.Now().Unix())
+	callUUID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	log.Printf("👂 订阅节点事件通道: fs.event.%s.channel", nodeID)
 	eventCount := 0
