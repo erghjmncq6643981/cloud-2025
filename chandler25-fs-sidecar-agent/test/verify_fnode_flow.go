@@ -53,7 +53,8 @@ func main() {
 			"destination": map[string]interface{}{
 				"call_params": []map[string]interface{}{
 					{
-						"dial_string": "user/1007",
+						"dial_string": "1007",
+						"context":     "default",
 						"cid_name":    "FlowTester",
 						"cid_number":  "1008",
 					},

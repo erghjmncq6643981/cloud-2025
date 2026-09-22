@@ -85,6 +85,10 @@ fcc-admin :8089 ----> selected Sidecar management HTTP
 
 同步应答表示 Sidecar 已处理 RPC，并不保证后续振铃、接通、桥接、录音落盘或挂机事件已经完成。最终结果由事件流确认。
 
+`FNode.Dial` 的规范目标由业务号码 `dial_string` 和必填 `context` 组成。Java 不发送 `sofia/gateway/...`、`user/...` 等节点实现字符串；Sidecar 校验号码和 context，再生成 `loopback/{number}/{context}` 交给 FreeSWITCH 拨号计划。内部分机使用 `default`，运营商使用其真实配置 context。gateway、SIP profile 和 context 到线路的映射属于 Sidecar/FreeSWITCH 运维边界。
+
+节点不会在 Dial 前查询 FCC 的终端在线投影。命令是否被 FreeSWITCH 接受由同步应答表示，真实振铃、接听、失败和挂机由后续 Channel 事件表示。
+
 `FNode.NativeAPI` 是受限逃生通道，不应成为业务调用的常规接口。
 
 ## 5. 标准事件
@@ -93,7 +97,7 @@ Sidecar 向 `fs.event.{nodeId}.{category}` 发布 JSON-RPC Notification：
 
 | Category | Method | 关键内容 |
 | --- | --- | --- |
-| `channel` | `Event.Channel` | Channel UUID、Ctrl ID、状态、方向、号码、时间和原因 |
+| `channel` | `Event.Channel` | Channel UUID、Ctrl ID、状态、方向、号码、context、认证分机、时间和原因 |
 | `dtmf` | `Event.DTMF` | Channel、按键和持续时间 |
 | `record` | `Event.Recording` | 开始/停止、文件路径和时长 |
 | `registration` | `Event.Registration` | 分机、域、注册状态、地址和 UA |

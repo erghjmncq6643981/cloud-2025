@@ -82,13 +82,13 @@ type FsExtension struct {
 type ExtensionDetail struct {
 	ID               int64  `json:"id"`
 	Extension        string `json:"extension"`
-	Password         string `json:"password,omitempty"`
+	Password         string `json:"-"`
 	Context          string `json:"context"`
 	Callgroup        string `json:"callgroup"`
 	EndpointType     string `json:"endpoint_type"`
 	IsEnabled        bool   `json:"is_enabled"`
 	Description      string `json:"description"`
-	XmlPath          string `json:"xml_path,omitempty"`
+	XmlPath          string `json:"-"`
 	IsRegistered     bool   `json:"is_registered"`
 	NetworkIP        string `json:"network_ip"`
 	NetworkPort      string `json:"network_port"`

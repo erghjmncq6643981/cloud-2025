@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -20,6 +20,7 @@ type MediaInfo struct {
 // --- 1. FNode.Dial (外呼发起) ---
 type CallParam struct {
 	DialString string            `json:"dial_string"`
+	Context    string            `json:"context"`
 	CidName    string            `json:"cid_name"`
 	CidNumber  string            `json:"cid_number"`
 	UUID       string            `json:"uuid"`
@@ -34,10 +35,6 @@ type DestinationParam struct {
 type FNodeDialParams struct {
 	CtrlUUID    string            `json:"ctrl_uuid"`
 	UUID        string            `json:"uuid"`
-	Extension   string            `json:"extension"`   // 简写入参兼容
-	DialString  string            `json:"dial_string"` // 简写入参兼容
-	CidName     string            `json:"cid_name"`
-	CidNumber   string            `json:"cid_number"`
 	Ringback    string            `json:"ringback"`
 	Sync        bool              `json:"sync"`
 	Timeout     int               `json:"timeout"`
@@ -63,9 +60,14 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Invalid dial params: "+err.Error(), nil)
 	}
 
-	dialString := p.DialString
-	cidName := p.CidName
-	cidNumber := p.CidNumber
+	if p.Destination == nil || len(p.Destination.CallParams) == 0 {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required destination.call_params", nil)
+	}
+
+	dialString := ""
+	dialContext := ""
+	cidName := ""
+	cidNumber := ""
 	uuid := p.UUID
 	callVars := make(map[string]string)
 
@@ -74,6 +76,9 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 		cp := p.Destination.CallParams[0]
 		if cp.DialString != "" {
 			dialString = cp.DialString
+		}
+		if cp.Context != "" {
+			dialContext = cp.Context
 		}
 		if cp.CidName != "" {
 			cidName = cp.CidName
@@ -87,17 +92,16 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 		for k, v := range cp.Params {
 			callVars[k] = v
 		}
-	} else if dialString == "" && p.Extension != "" {
-		dialString = fmt.Sprintf("user/%s", p.Extension)
 	}
 
-	if dialString == "" {
-		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required destination/dial_string/extension", nil)
+	if dialString == "" || dialContext == "" {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required dial_string or context", nil)
 	}
 
-	// 自动补充 user/ 前缀
-	if !strings.Contains(dialString, "/") {
-		dialString = fmt.Sprintf("user/%s", dialString)
+	var destinationError error
+	dialString, destinationError = resolveDialDestination(dialString, dialContext)
+	if destinationError != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, destinationError.Error(), nil)
 	}
 
 	if p.Timeout <= 0 {
@@ -159,6 +163,20 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 	}
 
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), uuid, p.CtrlUUID, 200, "OK")
+}
+
+var dialTargetPattern = regexp.MustCompile(`^[+0-9A-Za-z*#_.-]{1,128}$`)
+var dialContextPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+
+// resolveDialDestination 将业务号码与受控 context 转换为节点侧 FreeSWITCH 拨号表达式。
+func resolveDialDestination(dialTarget, dialContext string) (string, error) {
+	if !dialTargetPattern.MatchString(dialTarget) {
+		return "", fmt.Errorf("dial target contains unsupported characters")
+	}
+	if !dialContextPattern.MatchString(dialContext) {
+		return "", fmt.Errorf("dial context contains unsupported characters")
+	}
+	return fmt.Sprintf("loopback/%s/%s", dialTarget, dialContext), nil
 }
 
 // newChannelUUID 生成不携带业务前缀的 FreeSWITCH 话道 UUID。
@@ -317,12 +335,6 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 	} else {
 		// 满意度评价等收尾流程：支持播报致谢语并挂机
 		thankYouAudio := p.ThankYouFile
-		if thankYouAudio == "" {
-			defaultThankYou := "/Users/chandler/Documents/repository/github/cloud-2025/chandler26-jdk17-freeswitch-FCC/sounds/ivr_thankyou.wav"
-			if _, err := os.Stat(defaultThankYou); err == nil {
-				thankYouAudio = defaultThankYou
-			}
-		}
 
 		if thankYouAudio != "" {
 			inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",

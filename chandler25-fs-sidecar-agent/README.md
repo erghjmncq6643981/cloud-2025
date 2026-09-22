@@ -46,6 +46,8 @@ fcc-admin :8089 -------- selected admin HTTP --^
 
 Implemented RPC methods include `FNode.Dial`, `FNode.ChannelBridge`, `FNode.ReadDTMF`, `FNode.Play`, `FNode.Record`, `FNode.Hangup`, `FNode.Transfer`, `FNode.NativeAPI`, `FNode.Drain`, `FNode.Resume`, and `FNode.Status`. Only these canonical names are registered; old `call.*`, `node.*`, and `FNode.Bridge` aliases are rejected.
 
+`FNode.Dial` accepts a business target in `dial_string` and a required dialplan `context`. The Sidecar validates both values and expands them to `loopback/{target}/{context}`. Java callers do not send gateway/profile dial strings; carrier gateway selection remains in the FreeSWITCH dialplan for that context.
+
 Java no longer configures or sends a `nodeId`. In the current single-node mode, the dispatch ingress executes locally. A multi-node deployment requires a Coordinator/ownership registry to route `channel_uuid` commands and new `Dial` requests before using the internal `fs.cmd.{nodeId}` subject.
 
 ## HTTP and WebSocket API
