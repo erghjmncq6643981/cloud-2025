@@ -82,6 +82,10 @@ The CLI, gateway, extension, registration, and channel mutation endpoints are pr
 | `PG_DSN` | PostgreSQL connection string |
 | `LOG_LEVEL` | logging level |
 | `DISPATCH_INGRESS_ENABLED` | enable the local single-node `fs.cmd.dispatch` ingress; set false on nodes behind a real Coordinator |
+| `COMMAND_JOURNAL_DIR` | exclusive persistent command journal directory for this Sidecar process |
+| `EVENT_OUTBOX_DIR` | exclusive persistent event outbox directory for this Sidecar process |
+| `TTS_PROVIDER`, `TTS_WORK_DIR` | TTS provider and FreeSWITCH-shared output directory |
+| `ALIYUN_NLS_*` | Aliyun NLS application and credential settings when that provider is enabled |
 
 Production secrets must be supplied by environment/secret management and must not be committed or logged.
 
@@ -103,9 +107,7 @@ A local NATS instance can be started with the repository `docker-compose.yml`. F
 - `test/nats_client_demo.go` and `test/verify_fnode_flow.go` are separate manual integration programs. They both declare `package main` and duplicate names, so `go test ./...` is not a valid repository-wide command until those tools are split into separate directories.
 - An end-to-end result requires real NATS, PostgreSQL, FreeSWITCH ESL, SIP endpoints, and observable media/events.
 
-See [docs/DESIGN.md](./docs/DESIGN.md) for implemented protocol and data boundaries.
-
-### TTS 配置
+## TTS 配置
 
 `FNode.Play` 和 `FNode.ReadDTMF` 的 `media.type=TEXT` 会由 Sidecar 调用阿里云 NLS TTS，音频以内容哈希文件名原子写入 `TTS_WORK_DIR`，该目录必须同时挂载给 FreeSWITCH。FCC 只发送文案，不发送 `tts:`/`say:` 字符串；未配置 provider 时命令明确失败。
 
@@ -119,10 +121,15 @@ ALIYUN_NLS_VOICE=siyue
 ```
 
 也可以注入短期 `ALIYUN_NLS_TOKEN`，此时 Sidecar 不请求 AccessKey token 接口。密钥只从部署环境注入，日志不会输出密钥、文本或 token。
-# 运行可靠性配置（2026-09-20）
+## 运行可靠性配置
 
 当前启动必须配置独占持久目录 `COMMAND_JOURNAL_DIR` 与 `EVENT_OUTBOX_DIR`，并预先创建 NATS JetStream `FCC_EVENTS` 流。不得在升级时清空这些目录。
 
 `FNode.ChannelSnapshot` 是非缓存只读查询，成功结果 `data` 包含 `complete: true`、`channel_uuids`、`started_at`、`completed_at`（毫秒）。ESL 查询失败返回错误，不能视为空节点。`FNode.CommandResult` 参数是 `command_id`，仅查询原命令结果，不重复执行未知副作用。
 
 命令 journal 同 ID 不同参数拒绝；意图存在但结果缺失返回 UNKNOWN。当前要求每个节点仅一个 Sidecar 进程使用其目录，尚无多进程文件锁及自动保留清理策略。部署及跨电脑验收见 [FCC 验收指南](../../demo-2026/docs/fcc-cross-machine-acceptance.md)。
+
+## Documentation
+
+- [Implemented protocol and data boundaries](./docs/DESIGN.md)
+- [FCC documentation index](../../demo-2026/docs/README.md)

@@ -17,11 +17,11 @@
 
 Sidecar 不实现坐席账户、技能组、业务路由、流程版本、客户资料和业务话单投影。
 
-2026-09-20：自动外呼调度、客户资料、Windows 弹屏业务统一归属 fcc-server。Sidecar 已提供持久命令日志、FNode.CommandResult、FNode.ChannelSnapshot、稳定事件 ID 与落盘事件队列。部署顺序见 [跨电脑验收](../../../demo-2026/docs/fcc-cross-machine-acceptance.md)。真实 FreeSWITCH 媒体与断线恢复仍需目标环境验证。
+自动外呼调度、客户资料和 Windows 弹屏业务统一归属 fcc-server。Sidecar 已提供持久命令日志、FNode.CommandResult、FNode.ChannelSnapshot、稳定事件 ID 与落盘事件队列。部署顺序见 [跨电脑验收](../../../demo-2026/docs/fcc-cross-machine-acceptance.md)。真实 FreeSWITCH 媒体与断线恢复仍需目标环境验证。
 
 节点初始为 OFFLINE，成功读取并应用 FreeSWITCH 通道快照后才允许接单。准入仅允许 HEALTHY 且容量未满；排空期间探活不取消排空，恢复接单不能绕过离线。通道按 UUID 去重计数，双重销毁不会扣减其他通道；终态历史限 65536 条并保留源时间下界防止旧事件复活。每个心跳周期查询 `show channels as json`，校验 row_count、UUID 唯一性，以事件修订号防止旧快照覆盖并发事件。查询失败保留计数并置为不可接单；快照冲突下轮重试，高事件压力可能延迟首次恢复，需真机压测。
 
-ESL 命令超时后关闭旧连接，避免无请求标识的迟到回复误配下一命令；跨连接回复不能相互使用，超时是结果未知，不自动重拨。NATS 首次离线保留客户端和订阅并后台恢复。Go 1.27.1 下全部生产包测试与构建通过，真实 FreeSWITCH 联调待完成。这里恢复的是节点容量，不是 Java Call/Leg 或坐席业务事实；尚无原子拨号容量预占。
+ESL 命令超时后关闭旧连接，避免无请求标识的迟到回复误配下一命令；跨连接回复不能相互使用，超时是结果未知，不自动重拨。NATS 首次离线保留客户端和订阅并后台恢复。这里恢复的是节点容量，不是 Java Call/Leg 或坐席业务事实；尚无原子拨号容量预占。
 
 ## 2. 运行拓扑
 
@@ -115,7 +115,7 @@ Channel 状态包括 `START`、`CALLING`、`RINGING`、`ANSWERED`、`MEDIA`、`R
 
 事件含稳定 `event_id`：优先使用 nodeId + Core-UUID + Event-Sequence 的 SHA-256，无源序列时哈希完整原事件。事件先写 EVENT_OUTBOX_DIR，再投递 FCC_EVENTS JetStream，只有 PubAck 后删除本地记录。文件序号保持接收顺序，避免同毫秒事件按哈希乱序。Java 使用持久 Inbox 去重；容量、保留期限和处理失败仍需监控，不能声称无限期不丢事件。
 
-Sidecar 与 Java 统一使用 `Event.Recording`，NATS 分类保持 `record`。Go 生产包测试已通过；尚不能据此宣称录音真实链路已验证。
+Sidecar 与 Java 统一使用 `Event.Recording`，NATS 分类保持 `record`。协议测试不能替代录音真实链路验证。
 
 ## 6. 节点治理
 
@@ -127,7 +127,7 @@ Sidecar 与 Java 统一使用 `Event.Recording`，NATS 分类保持 `record`。G
 - 活跃 Channel 和最大容量快照；
 - 周期心跳 `fs.status.{nodeId}.heartbeat`。
 
-当前活跃数由事件增减维护，进程重启或事件丢失后可能与 FreeSWITCH 实际状态偏离。运维判断需要结合状态查询和 PostgreSQL/FreeSWITCH 运行表。
+活跃数由事件增减维护，并由周期 `show channels as json` 快照校正。快照失败时保留上次计数并将节点置为不可接单，不把失败解释为零通道；运维判断仍需结合状态查询和 PostgreSQL/FreeSWITCH 运行表。
 
 ## 7. PostgreSQL
 
@@ -145,7 +145,7 @@ Sidecar 还维护扩展表：
 - `fs_cdr`
 - SIP/Profile 相关管理数据
 
-空库结构位于 `db/repo.go` 与 `db/schema_fs.sql`。启动不导入演示分机、网关或话单。网关状态默认 UNKNOWN，延迟和录音质量未测量时为空。已有开发库的修正顺序见 `docs/GOVERNANCE_VERIFICATION.md`。
+空库结构位于 `db/repo.go` 与 `db/schema_fs.sql`。启动只创建空表，不导入演示分机、网关或话单。网关状态默认为 `UNKNOWN`，未测量的延迟和录音质量为空，命令耗时不能冒充 SIP RTT。当前全新项目只支持使用最新基线重建开发库，不维护旧库兼容 SQL。
 
 ## 8. HTTP 管理面
 
@@ -158,7 +158,7 @@ Sidecar 还维护扩展表：
 - CLI 命令执行；
 - 控制台日志 WebSocket。
 
-这些接口直接影响软交换或暴露底层数据。当前服务自身没有完整的认证、角色、租户和审计实现，生产必须通过可信网络或认证网关限制访问。
+这些接口直接影响软交换或暴露底层数据。当前服务自身没有完整的认证、角色和审计实现，生产必须通过可信网络或认证网关限制访问。
 
 ## 9. 故障行为
 
@@ -176,3 +176,4 @@ Sidecar 还维护扩展表：
 - CLI、强拆、强制注销、密码和网关操作需要上游授权和业务审计。
 - 已有录音事件、RPC 方法边界和响应脱敏测试；`test/*.go` 是两个需要分别运行的手动联调程序。它们位于同一目录且包含重复的 `main`/DTO 定义，因此当前不能用 `go test ./...` 作为全仓验证命令。
 - 完整验证需要 NATS、PostgreSQL、FreeSWITCH ESL、SIP 注册终端和可观察的媒体/事件链路。
+- 标准测试命令和真实环境场景见 [FCC 测试策略](../../../demo-2026/docs/testing-architecture-and-test-cases.md) 与 [跨电脑验收](../../../demo-2026/docs/fcc-cross-machine-acceptance.md)。
