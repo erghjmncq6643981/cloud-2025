@@ -17,6 +17,7 @@ import (
 	"chandler25-fs-sidecar-agent/governance"
 	"chandler25-fs-sidecar-agent/nats"
 	"chandler25-fs-sidecar-agent/rpc"
+	"chandler25-fs-sidecar-agent/tts"
 )
 
 const banner = `
@@ -51,6 +52,7 @@ func main() {
 	// 4. 初始化事件清洗器与 JSON-RPC 路由器
 	normalizer := event.NewNormalizer(cfg.NodeID)
 	dispatcher := rpc.NewDispatcher(eslClient, gov)
+	dispatcher.SetMediaResolver(tts.NewProvider(cfg))
 	if err := dispatcher.UseCommandJournal(os.Getenv("COMMAND_JOURNAL_DIR")); err != nil {
 		log.Fatalf("[启动] 命令持久目录不可用: %v", err)
 	}

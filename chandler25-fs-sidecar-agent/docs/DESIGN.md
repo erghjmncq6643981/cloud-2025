@@ -89,7 +89,15 @@ fcc-admin :8089 ----> selected Sidecar management HTTP
 
 节点不会在 Dial 前查询 FCC 的终端在线投影。命令是否被 FreeSWITCH 接受由同步应答表示，真实振铃、接听、失败和挂机由后续 Channel 事件表示。
 
+命令选项使用固定协议值并在进入 ESL 前严格校验：`FNode.ReadDTMF.action_after` 只允许 `PARK/HANGUP`，`FNode.Play.action_after` 只允许 `NONE/HANGUP`，`FNode.Record.action` 只允许 `START/STOP`。未知值不会降级为挂机或开始录音。`FNode.Transfer` 只接收业务 `target` 与 `context`，Sidecar 校验后生成 `target XML context`，Java 不拼 FreeSWITCH 转接表达式。
+
 `FNode.NativeAPI` 是受限逃生通道，不应成为业务调用的常规接口。
+
+### 4.1 文本语音
+
+`FNode.Play`、`FNode.ReadDTMF` 支持 `media.type=TEXT`。Sidecar 在本地 TTS provider 边界内完成文本清洗、阿里云 NLS 合成、内容哈希缓存和原子落盘，返回与 FreeSWITCH 共享的绝对文件路径，再执行普通 `uuid_broadcast`/`play_and_get_digits`。Java 不感知 AccessKey、NLS token、WebSocket 或供应商参数，业务命令只携带文案；`voice` 仅作为受控音色选择，默认值来自 Sidecar 配置。TTS 失败不降级为 `say:` 或 `tts:` 字符串，直接返回可观测媒体错误。
+
+工作目录必须与 FreeSWITCH 播放文件系统一致，临时文件使用同目录原子改名，进程重启后已完成文件仍可复用。真实阿里云、文件共享和媒体播放需要目标环境联调验证。
 
 ## 5. 标准事件
 

@@ -11,12 +11,18 @@ import (
 
 type MethodHandler func(req *JsonRpcRequest) *JsonRpcResponse
 
+// MediaResolver resolves caller text into a local file shared with FreeSWITCH.
+type MediaResolver interface {
+	Resolve(text, voice string) (string, error)
+}
+
 // Dispatcher JSON-RPC 2.0 路由器
 type Dispatcher struct {
-	handlers map[string]MethodHandler
-	esl      *esl.Client
-	gov      *governance.NodeManager
-	journal  *CommandJournal
+	handlers      map[string]MethodHandler
+	esl           *esl.Client
+	gov           *governance.NodeManager
+	journal       *CommandJournal
+	mediaResolver MediaResolver
 }
 
 // UseCommandJournal enables persistent deduplication before accepting traffic.
@@ -36,6 +42,11 @@ func NewDispatcher(eslClient *esl.Client, govManager *governance.NodeManager) *D
 	}
 	d.registerMethods()
 	return d
+}
+
+// SetMediaResolver configures the provider used by TEXT media commands.
+func (d *Dispatcher) SetMediaResolver(resolver MediaResolver) {
+	d.mediaResolver = resolver
 }
 
 // HandleRaw 接收原始 JSON 字节流，分发并返回响应字节流

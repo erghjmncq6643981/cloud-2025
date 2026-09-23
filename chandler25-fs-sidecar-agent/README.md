@@ -104,6 +104,21 @@ A local NATS instance can be started with the repository `docker-compose.yml`. F
 - An end-to-end result requires real NATS, PostgreSQL, FreeSWITCH ESL, SIP endpoints, and observable media/events.
 
 See [docs/DESIGN.md](./docs/DESIGN.md) for implemented protocol and data boundaries.
+
+### TTS 配置
+
+`FNode.Play` 和 `FNode.ReadDTMF` 的 `media.type=TEXT` 会由 Sidecar 调用阿里云 NLS TTS，音频以内容哈希文件名原子写入 `TTS_WORK_DIR`，该目录必须同时挂载给 FreeSWITCH。FCC 只发送文案，不发送 `tts:`/`say:` 字符串；未配置 provider 时命令明确失败。
+
+```text
+TTS_PROVIDER=aliyun_nls
+TTS_WORK_DIR=/var/lib/fcc/tts
+ALIYUN_NLS_APP_KEY=...
+ALIYUN_NLS_ACCESS_KEY_ID=...
+ALIYUN_NLS_ACCESS_KEY_SECRET=...
+ALIYUN_NLS_VOICE=siyue
+```
+
+也可以注入短期 `ALIYUN_NLS_TOKEN`，此时 Sidecar 不请求 AccessKey token 接口。密钥只从部署环境注入，日志不会输出密钥、文本或 token。
 # 运行可靠性配置（2026-09-20）
 
 当前启动必须配置独占持久目录 `COMMAND_JOURNAL_DIR` 与 `EVENT_OUTBOX_DIR`，并预先创建 NATS JetStream `FCC_EVENTS` 流。不得在升级时清空这些目录。

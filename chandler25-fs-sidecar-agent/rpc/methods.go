@@ -11,10 +11,8 @@ import (
 
 // MediaInfo 媒体参数对象（支持本地音视频文件与 TTS 文本播报）
 type MediaInfo struct {
-	Type   string `json:"type"`   // "TEXT", "FILE"
-	Data   string `json:"data"`   // 文件路径或待播报文本
-	Voice  string `json:"voice"`  // 发音人 (如 "aiqi")
-	Engine string `json:"engine"` // 引擎 (如 "ali", "flite")
+	Type string `json:"type"` // "TEXT", "FILE"
+	Data string `json:"data"` // 文件路径或待播报文本
 }
 
 // --- 1. FNode.Dial (外呼发起) ---
@@ -291,18 +289,10 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 		regex = "[1-4]"
 	}
 
-	// 媒体解析
-	audioSrc := p.AudioFile
-	if audioSrc == "" {
-		audioSrc = p.Media.Data
-	}
-	if p.Media.Type == "TEXT" && audioSrc != "" {
-		// 如果是文本，尝试通过 say 模块或 TTS 引擎播报
-		if p.Media.Engine != "" {
-			audioSrc = fmt.Sprintf("tts:%s:%s:%s", p.Media.Engine, p.Media.Voice, audioSrc)
-		} else {
-			audioSrc = fmt.Sprintf("say:zh:text:iterated:%s", audioSrc)
-		}
+	// 媒体解析。TEXT 必须先由 Sidecar TTS provider 落盘，禁止把文本拼进 ESL 魔法字符串。
+	audioSrc, mediaErr := d.resolveMedia(p.Media, p.AudioFile)
+	if mediaErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeMediaError, mediaErr.Error(), nil)
 	}
 	if audioSrc == "" {
 		audioSrc = "silence_stream://250"
@@ -322,9 +312,9 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 	}
 	intervalSilence := fmt.Sprintf("silence_stream://%d", timeout)
 
-	actionAfter := strings.ToLower(p.ActionAfter)
-	if actionAfter == "" {
-		actionAfter = "hangup"
+	actionAfter, actionErr := readDTMFPostAction(p.ActionAfter)
+	if actionErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, actionErr.Error(), nil)
 	}
 
 	var inlineApp string
@@ -357,12 +347,28 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "OK")
 }
 
+// readDTMFPostAction validates the small protocol vocabulary before any ESL
+// expression is assembled. An omitted value keeps the historical safe terminal
+// behavior, while unknown values are rejected instead of being treated as hangup.
+func readDTMFPostAction(value string) (string, error) {
+	action := strings.ToLower(strings.TrimSpace(value))
+	switch action {
+	case "":
+		return "hangup", nil
+	case "park", "hangup":
+		return action, nil
+	default:
+		return "", fmt.Errorf("unsupported action_after: %s", value)
+	}
+}
+
 // --- 4. FNode.Play (放音播报) ---
 type FNodePlayParams struct {
-	CtrlUUID string    `json:"ctrl_uuid"`
-	UUID     string    `json:"uuid"`
-	Media    MediaInfo `json:"media"`
-	FilePath string    `json:"file_path"` // 兼容直接传文件
+	CtrlUUID    string    `json:"ctrl_uuid"`
+	UUID        string    `json:"uuid"`
+	Media       MediaInfo `json:"media"`
+	FilePath    string    `json:"file_path"`    // 兼容直接传文件
+	ActionAfter string    `json:"action_after"` // "NONE" 或 "HANGUP"
 }
 
 func (d *Dispatcher) handleFNodePlay(req *JsonRpcRequest) *JsonRpcResponse {
@@ -371,29 +377,64 @@ func (d *Dispatcher) handleFNodePlay(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required param: uuid", nil)
 	}
 
-	audioSrc := p.FilePath
-	if audioSrc == "" {
-		audioSrc = p.Media.Data
-	}
-	if p.Media.Type == "TEXT" && audioSrc != "" {
-		if p.Media.Engine != "" {
-			audioSrc = fmt.Sprintf("tts:%s:%s:%s", p.Media.Engine, p.Media.Voice, audioSrc)
-		} else {
-			audioSrc = fmt.Sprintf("say:zh:text:iterated:%s", audioSrc)
-		}
+	audioSrc, mediaErr := d.resolveMedia(p.Media, p.FilePath)
+	if mediaErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeMediaError, mediaErr.Error(), nil)
 	}
 	if audioSrc == "" {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing media/data or file_path", nil)
 	}
 
-	// 采用 uuid_broadcast 异步非阻塞推流播放，播放完成后自动恢复原状态
-	args := fmt.Sprintf("%s %s both", p.UUID, audioSrc)
-	res, err := d.esl.ExecuteAPI("uuid_broadcast", args)
+	command, args, commandErr := playCommand(p.UUID, audioSrc, p.ActionAfter)
+	if commandErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, commandErr.Error(), nil)
+	}
+	res, err := d.esl.ExecuteAPI(command, args)
 	if err != nil {
 		return NewErrorResponse(req.ID, ErrCodeMediaError, err.Error(), nil)
 	}
 
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 200, res)
+}
+
+// playCommand maps the protocol-level post action to one atomic FreeSWITCH
+// execution. HANGUP uses an inline transfer so the channel is not torn down
+// before playback finishes; ordinary playback remains non-blocking.
+func playCommand(uuid, audioSrc, actionAfter string) (string, string, error) {
+	switch strings.ToUpper(strings.TrimSpace(actionAfter)) {
+	case "", "NONE":
+		return "uuid_broadcast", fmt.Sprintf("%s %s both", uuid, audioSrc), nil
+	case "HANGUP":
+		return "uuid_transfer", fmt.Sprintf(
+			"%s '%s' inline",
+			uuid,
+			fmt.Sprintf("playback:%s,hangup:NORMAL_CLEARING", audioSrc),
+		), nil
+	default:
+		return "", "", fmt.Errorf("unsupported action_after: %s", actionAfter)
+	}
+}
+
+// resolveMedia turns FILE data into a path and TEXT data into a provider-owned
+// shared file. Provider-specific fields stay inside the Sidecar boundary.
+func (d *Dispatcher) resolveMedia(media MediaInfo, explicitPath string) (string, error) {
+	if strings.EqualFold(media.Type, "TEXT") {
+		if d.mediaResolver == nil {
+			return "", fmt.Errorf("text media requires configured tts provider")
+		}
+		if strings.TrimSpace(media.Data) == "" {
+			return "", fmt.Errorf("text media data is empty")
+		}
+		return d.mediaResolver.Resolve(media.Data, "")
+	}
+	path := explicitPath
+	if path == "" {
+		path = media.Data
+	}
+	if path == "" {
+		return "", fmt.Errorf("missing media/data or file_path")
+	}
+	return path, nil
 }
 
 // --- 5. FNode.Record (录音启停) ---
@@ -419,9 +460,9 @@ func (d *Dispatcher) handleFNodeRecord(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing path/file_path", nil)
 	}
 
-	action := strings.ToLower(p.Action)
-	if action != "start" && action != "stop" {
-		action = "start"
+	action, actionErr := recordAction(p.Action)
+	if actionErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, actionErr.Error(), nil)
 	}
 
 	args := fmt.Sprintf("%s %s %s", p.UUID, action, filePath)
@@ -431,6 +472,18 @@ func (d *Dispatcher) handleFNodeRecord(req *JsonRpcRequest) *JsonRpcResponse {
 	}
 
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 200, res)
+}
+
+// recordAction validates the required recording operation. Defaulting an
+// unknown value to START could unexpectedly begin recording, so it fails closed.
+func recordAction(value string) (string, error) {
+	action := strings.ToLower(strings.TrimSpace(value))
+	switch action {
+	case "start", "stop":
+		return action, nil
+	default:
+		return "", fmt.Errorf("unsupported recording action: %s", value)
+	}
 }
 
 // --- 6. FNode.Hangup (挂机) ---
@@ -495,31 +548,40 @@ func (d *Dispatcher) handleFNodeNativeAPI(req *JsonRpcRequest) *JsonRpcResponse 
 
 // --- 8. FNode.Transfer (呼叫转接) ---
 type FNodeTransferParams struct {
-	CtrlUUID    string `json:"ctrl_uuid"`
-	UUID        string `json:"uuid"`
-	Destination string `json:"destination"`
-	Inline      bool   `json:"inline"`
+	CtrlUUID string `json:"ctrl_uuid"`
+	UUID     string `json:"uuid"`
+	Target   string `json:"target"`
+	Context  string `json:"context"`
 }
 
 func (d *Dispatcher) handleFNodeTransfer(req *JsonRpcRequest) *JsonRpcResponse {
 	var p FNodeTransferParams
-	if err := json.Unmarshal(req.Params, &p); err != nil || p.UUID == "" || p.Destination == "" {
-		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required params: uuid, destination", nil)
+	if err := json.Unmarshal(req.Params, &p); err != nil || p.UUID == "" {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required param: uuid", nil)
+	}
+	destination, destinationErr := resolveTransferDestination(p.Target, p.Context)
+	if destinationErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, destinationErr.Error(), nil)
 	}
 
-	var args string
-	if p.Inline {
-		args = fmt.Sprintf("%s '%s' inline", p.UUID, p.Destination)
-	} else {
-		args = fmt.Sprintf("%s %s", p.UUID, p.Destination)
-	}
-
-	res, err := d.esl.ExecuteAPI("uuid_transfer", args)
+	res, err := d.esl.ExecuteAPI("uuid_transfer", fmt.Sprintf("%s %s", p.UUID, destination))
 	if err != nil {
 		return NewErrorResponse(req.ID, ErrCodeInternalError, err.Error(), nil)
 	}
 
 	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 200, res)
+}
+
+// resolveTransferDestination converts a business target and routing context to
+// the node-local FreeSWITCH transfer expression.
+func resolveTransferDestination(target, context string) (string, error) {
+	if !dialTargetPattern.MatchString(target) {
+		return "", fmt.Errorf("transfer target contains unsupported characters")
+	}
+	if !dialContextPattern.MatchString(context) {
+		return "", fmt.Errorf("transfer context contains unsupported characters")
+	}
+	return fmt.Sprintf("%s XML %s", target, context), nil
 }
 
 // --- 9. 节点治理与运维类方法 ---
