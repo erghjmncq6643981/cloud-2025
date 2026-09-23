@@ -1456,8 +1456,22 @@ func extractXmlVar(content, key string) string {
 	return ""
 }
 
+var reSingleDollarVar = regexp.MustCompile(`(^|[^\$])\$\{([^}]+)\}`)
+
+// sanitizeFsVar 防范前端或外部 API 误传单美元符号 ${...}，自动纠正为 FreeSWITCH 预处理全局宏 $${...}
+func sanitizeFsVar(val string) string {
+	if val == "" {
+		return val
+	}
+	for reSingleDollarVar.MatchString(val) {
+		val = reSingleDollarVar.ReplaceAllString(val, `${1}$${${2}}`)
+	}
+	return val
+}
+
 // 辅助函数：替换或新增 XML 变量
 func setOrReplaceXmlVar(content, key, value string) string {
+	value = sanitizeFsVar(value)
 	pattern := fmt.Sprintf(`(?m)^[ \t]*<X-PRE-PROCESS\s+cmd="set"\s+data="%s=[^"]*"\s*/>`, regexp.QuoteMeta(key))
 	re := regexp.MustCompile(pattern)
 	replacement := fmt.Sprintf(`  <X-PRE-PROCESS cmd="set" data="%s=%s"/>`, key, value)
