@@ -88,7 +88,8 @@ func (c *Client) handleRPC(msg *nats.Msg) {
 	}
 }
 
-// PublishEvent 发布标准化 JSON-RPC 2.0 事件到 NATS (Event.Channel, Event.DTMF, Event.Recording)
+// PublishEvent 发布标准化 JSON-RPC 2.0 事件到 NATS。
+// 事件类型包括 Event.Channel、Event.CommandResult、Event.DTMF 和 Event.Recording 等。
 func (c *Client) PublishEvent(normEvent *event.NormalizedEventResult) error {
 	if c.nc == nil || c.nc.IsClosed() {
 		return fmt.Errorf("NATS 连接已关闭")

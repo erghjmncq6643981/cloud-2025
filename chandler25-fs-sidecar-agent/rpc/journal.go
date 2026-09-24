@@ -106,7 +106,51 @@ func (j *CommandJournal) result(id interface{}, key string) *JsonRpcResponse {
 	return &response
 }
 
-// Lookup returns the recorded RPC outcome without reexecuting the command.
+// Complete durably stores a final asynchronous outcome without replacing the
+// original acceptance reply used to deduplicate transport retries.
+func (j *CommandJournal) Complete(id string, result FNodeResult) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	key, err := commandKey(id)
+	if err != nil {
+		return err
+	}
+	if _, err = os.Stat(filepath.Join(j.root, key+".intent")); err != nil {
+		return fmt.Errorf("command intent missing: %w", err)
+	}
+	data, err := json.Marshal(NewSuccessResponse(id, result))
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(j.root, key+".final")
+	if previous, readErr := os.ReadFile(target); readErr == nil {
+		if string(previous) != string(data) {
+			return fmt.Errorf("conflicting final command result")
+		}
+		return nil
+	} else if !os.IsNotExist(readErr) {
+		return readErr
+	}
+	file, err := os.CreateTemp(j.root, "command-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err = file.Write(data); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(file.Name(), target)
+}
+
+// Lookup returns the final asynchronous result when available, otherwise the
+// recorded acceptance or unknown outcome, without reexecuting the command.
 func (j *CommandJournal) Lookup(id interface{}) *JsonRpcResponse {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -116,6 +160,16 @@ func (j *CommandJournal) Lookup(id interface{}) *JsonRpcResponse {
 	}
 	if _, err = os.Stat(filepath.Join(j.root, key+".intent")); os.IsNotExist(err) {
 		return NewErrorResponse(id, -32004, "Command not recorded", nil)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(j.root, key+".final")); readErr == nil {
+		var response JsonRpcResponse
+		if json.Unmarshal(data, &response) != nil {
+			return NewErrorResponse(id, -32000, "Final command result damaged", nil)
+		}
+		response.ID = id
+		return &response
+	} else if !os.IsNotExist(readErr) {
+		return NewErrorResponse(id, -32000, "Final command result unavailable", nil)
 	}
 	return j.result(id, key)
 }

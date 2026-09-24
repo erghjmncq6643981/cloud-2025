@@ -165,6 +165,7 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 
 var dialTargetPattern = regexp.MustCompile(`^[+0-9A-Za-z*#_.-]{1,128}$`)
 var dialContextPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+var commandIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
 // resolveDialDestination 将业务号码与受控 context 转换为节点侧 FreeSWITCH 拨号表达式。
 func resolveDialDestination(dialTarget, dialContext string) (string, error) {
@@ -196,6 +197,39 @@ func newChannelUUID() string {
 		bytes[8:10],
 		bytes[10:16],
 	)
+}
+
+// FNodeAnswerParams defines the channel identity required by FNode.Answer.
+type FNodeAnswerParams struct {
+	CtrlUUID string `json:"ctrl_uuid"`
+	UUID     string `json:"uuid"`
+}
+
+// handleFNodeAnswer accepts an inbound channel. The synchronous reply only
+// confirms command handling; Event.Channel/ANSWERED remains the channel fact.
+func (d *Dispatcher) handleFNodeAnswer(req *JsonRpcRequest) *JsonRpcResponse {
+	var p FNodeAnswerParams
+	if err := json.Unmarshal(req.Params, &p); err != nil || p.UUID == "" {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required param: uuid", nil)
+	}
+	if !commandIDPattern.MatchString(p.UUID) ||
+		(p.CtrlUUID != "" && !commandIDPattern.MatchString(p.CtrlUUID)) {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Unsafe channel or control identifier", nil)
+	}
+	if p.CtrlUUID != "" {
+		setResult, err := d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s ctrl_uuid %s", p.UUID, p.CtrlUUID))
+		if err != nil || !strings.HasPrefix(setResult, "+OK") {
+			return NewErrorResponse(req.ID, ErrCodeInternalError, "Cannot set answer control identity", nil)
+		}
+	}
+	res, err := d.esl.ExecuteAPI("uuid_answer", p.UUID)
+	if err != nil {
+		return NewErrorResponse(req.ID, ErrCodeInternalError, err.Error(), nil)
+	}
+	if !strings.HasPrefix(res, "+OK") {
+		return NewErrorResponse(req.ID, ErrCodeInternalError, "Answer failed: "+res, map[string]string{"raw": res})
+	}
+	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "ACCEPTED")
 }
 
 // --- 2. FNode.ChannelBridge (话道桥接) ---
@@ -317,21 +351,30 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, actionErr.Error(), nil)
 	}
 
+	commandID, commandErr := requestCommandID(req.ID)
+	if commandErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidRequest, commandErr.Error(), nil)
+	}
+	if !commandIDPattern.MatchString(p.UUID) ||
+		(p.CtrlUUID != "" && !commandIDPattern.MatchString(p.CtrlUUID)) {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Unsafe channel or control identifier", nil)
+	}
+	prefix := commandContextApplications(commandID, "FNode.ReadDTMF", p.CtrlUUID)
 	var inlineApp string
 	if actionAfter == "park" {
 		// 导航收号等中间流程：收号完成/超时后转入 park 驻留，等待后续路由桥接
-		inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,park",
-			p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
+		inlineApp = fmt.Sprintf("%s,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,park",
+			prefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
 	} else {
 		// 满意度评价等收尾流程：支持播报致谢语并挂机
 		thankYouAudio := p.ThankYouFile
 
 		if thankYouAudio != "" {
-			inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",
-				p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout, thankYouAudio)
+			inlineApp = fmt.Sprintf("%s,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",
+				prefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout, thankYouAudio)
 		} else {
-			inlineApp = fmt.Sprintf("play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,hangup:NORMAL_CLEARING",
-				p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
+			inlineApp = fmt.Sprintf("%s,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,hangup:NORMAL_CLEARING",
+				prefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
 		}
 	}
 
@@ -344,7 +387,7 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeMediaError, "ReadDTMF failed: "+res, map[string]string{"raw": res})
 	}
 
-	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "OK")
+	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "ACCEPTED")
 }
 
 // readDTMFPostAction validates the small protocol vocabulary before any ESL
@@ -385,7 +428,21 @@ func (d *Dispatcher) handleFNodePlay(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing media/data or file_path", nil)
 	}
 
-	command, args, commandErr := playCommand(p.UUID, audioSrc, p.ActionAfter)
+	commandID, commandIDErr := requestCommandID(req.ID)
+	if commandIDErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInvalidRequest, commandIDErr.Error(), nil)
+	}
+	if !commandIDPattern.MatchString(p.UUID) ||
+		(p.CtrlUUID != "" && !commandIDPattern.MatchString(p.CtrlUUID)) {
+		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Unsafe channel or control identifier", nil)
+	}
+	command, args, commandErr := playCommand(
+		p.UUID,
+		audioSrc,
+		p.ActionAfter,
+		commandID,
+		p.CtrlUUID,
+	)
 	if commandErr != nil {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, commandErr.Error(), nil)
 	}
@@ -393,26 +450,66 @@ func (d *Dispatcher) handleFNodePlay(req *JsonRpcRequest) *JsonRpcResponse {
 	if err != nil {
 		return NewErrorResponse(req.ID, ErrCodeMediaError, err.Error(), nil)
 	}
+	if !strings.HasPrefix(res, "+OK") {
+		return NewErrorResponse(req.ID, ErrCodeMediaError, "Play failed: "+res, nil)
+	}
 
-	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 200, res)
+	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "ACCEPTED")
 }
 
 // playCommand maps the protocol-level post action to one atomic FreeSWITCH
 // execution. HANGUP uses an inline transfer so the channel is not torn down
 // before playback finishes; ordinary playback remains non-blocking.
-func playCommand(uuid, audioSrc, actionAfter string) (string, string, error) {
+func playCommand(uuid, audioSrc, actionAfter, commandID, ctrlUUID string) (string, string, error) {
 	switch strings.ToUpper(strings.TrimSpace(actionAfter)) {
 	case "", "NONE":
 		return "uuid_broadcast", fmt.Sprintf("%s %s both", uuid, audioSrc), nil
+	case "PARK":
+		return "uuid_transfer", fmt.Sprintf(
+			"%s '%s' inline",
+			uuid,
+			fmt.Sprintf(
+				"%s,playback:%s,park",
+				commandContextApplications(commandID, "FNode.Play", ctrlUUID),
+				audioSrc,
+			),
+		), nil
 	case "HANGUP":
 		return "uuid_transfer", fmt.Sprintf(
 			"%s '%s' inline",
 			uuid,
-			fmt.Sprintf("playback:%s,hangup:NORMAL_CLEARING", audioSrc),
+			fmt.Sprintf(
+				"%s,playback:%s,hangup:NORMAL_CLEARING",
+				commandContextApplications(commandID, "FNode.Play", ctrlUUID),
+				audioSrc,
+			),
 		), nil
 	default:
 		return "", "", fmt.Errorf("unsupported action_after: %s", actionAfter)
 	}
+}
+
+// requestCommandID validates the JSON-RPC identifier used to correlate a
+// later Event.CommandResult with the original command.
+func requestCommandID(value interface{}) (string, error) {
+	commandID, ok := value.(string)
+	if !ok || !commandIDPattern.MatchString(commandID) {
+		return "", fmt.Errorf("command id must be a safe non-empty string")
+	}
+	return commandID, nil
+}
+
+// commandContextApplications creates controlled inline set applications.
+// Command and control identifiers are data, never caller-provided ESL syntax.
+func commandContextApplications(commandID, method, ctrlUUID string) string {
+	applications := []string{
+		"set:fcc_command_id=" + commandID,
+		"set:fcc_command_method=" + method,
+	}
+	if ctrlUUID != "" {
+		applications = append(applications, "set:ctrl_uuid="+ctrlUUID)
+	}
+	return strings.Join(applications, ",")
 }
 
 // resolveMedia turns FILE data into a path and TEXT data into a provider-owned

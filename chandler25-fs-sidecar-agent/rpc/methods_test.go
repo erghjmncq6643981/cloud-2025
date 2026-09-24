@@ -8,16 +8,35 @@ import (
 // TestPlayCommand verifies that closing media is played before the terminal
 // hangup instead of being interrupted by a second command.
 func TestPlayCommand(t *testing.T) {
-	command, args, err := playCommand("channel-a", "/work/closing.wav", "HANGUP")
+	command, args, err := playCommand(
+		"channel-a",
+		"/work/closing.wav",
+		"PARK",
+		"closing-voice-1",
+		"ctrl-1",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if command != "uuid_transfer" || !strings.Contains(args, "playback:/work/closing.wav,hangup:NORMAL_CLEARING") {
+	if command != "uuid_transfer" ||
+		!strings.Contains(args, "set:fcc_command_id=closing-voice-1") ||
+		!strings.Contains(args, "playback:/work/closing.wav,park") {
 		t.Fatalf("unexpected closing playback command: %s %s", command, args)
 	}
 
-	if _, _, err = playCommand("channel-a", "/work/closing.wav", "TRANSFER"); err == nil {
+	if _, _, err = playCommand("channel-a", "/work/closing.wav", "TRANSFER", "play-1", "ctrl-1"); err == nil {
 		t.Fatal("unsupported post action must be rejected")
+	}
+}
+
+// TestRequestCommandID verifies command-result correlation cannot inject an
+// inline FreeSWITCH application.
+func TestRequestCommandID(t *testing.T) {
+	if value, err := requestCommandID("binding-result-9001"); err != nil || value == "" {
+		t.Fatalf("expected canonical command id, value=%q err=%v", value, err)
+	}
+	if _, err := requestCommandID("bad,hangup"); err == nil {
+		t.Fatal("unsafe command id must be rejected")
 	}
 }
 

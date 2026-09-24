@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -76,7 +77,32 @@ func main() {
 	}
 
 	// 5.5 初始化并启动管理面 HTTP 同步服务 (分机开户、控制面 API 及终端日志流)
-	eventOutbox, err := nats.StartEventOutbox(os.Getenv("EVENT_OUTBOX_DIR"), natsClient, cfg.NodeID)
+	completeCommand := func(payload []byte) error {
+		var notification struct {
+			Method string                         `json:"method"`
+			Params event.CommandResultEventParams `json:"params"`
+		}
+		if err := json.Unmarshal(payload, &notification); err != nil {
+			return err
+		}
+		if notification.Method != "Event.CommandResult" ||
+			(notification.Params.CommandStatus != event.CommandResultSucceeded &&
+				notification.Params.CommandStatus != event.CommandResultFailed) {
+			return fmt.Errorf("invalid command result event")
+		}
+		return dispatcher.CompleteCommand(notification.Params.CommandID, rpc.FNodeResult{
+			NodeID:   notification.Params.NodeID,
+			Code:     notification.Params.Code,
+			Message:  notification.Params.Message,
+			UUID:     notification.Params.UUID,
+			CtrlUUID: notification.Params.CtrlUUID,
+			Data: map[string]interface{}{
+				"command_status": notification.Params.CommandStatus,
+				"result":         notification.Params.Result,
+			},
+		})
+	}
+	eventOutbox, err := nats.StartEventOutbox(os.Getenv("EVENT_OUTBOX_DIR"), natsClient, cfg.NodeID, completeCommand)
 	if err != nil {
 		log.Fatalf("[启动] 事件持久目录不可用: %v", err)
 	}
@@ -108,8 +134,16 @@ func main() {
 				gov.ObserveChannel(normEvent.UUID, normEvent.State, sourceMicros)
 			}
 
-			// 发布标准化事件到 NATS (fs.event.{nodeId}.channel / dtmf / record)
-			if err := eventOutbox.Store(normEvent); err != nil {
+			// 先持久标准化事件，再由 Outbox 发布到对应的 fs.event 分类主题。
+			store := func() error {
+				if normEvent.Category == "command" {
+					return eventOutbox.StoreAndComplete(normEvent, func() error {
+						return completeCommand(normEvent.RawJSON)
+					})
+				}
+				return eventOutbox.Store(normEvent)
+			}
+			if err := store(); err != nil {
 				gov.ObserveHealth(false)
 				log.Fatalf("[事件持久化] 写盘失败，停止接入防止静默丢事件: %v", err)
 			}

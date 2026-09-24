@@ -70,6 +70,7 @@ fcc-admin :8089 ----> selected Sidecar management HTTP
 当前方法：
 
 - `FNode.Dial`
+- `FNode.Answer`
 - `FNode.ChannelBridge`
 - `FNode.ReadDTMF`
 - `FNode.Play`
@@ -89,7 +90,7 @@ fcc-admin :8089 ----> selected Sidecar management HTTP
 
 节点不会在 Dial 前查询 FCC 的终端在线投影。命令是否被 FreeSWITCH 接受由同步应答表示，真实振铃、接听、失败和挂机由后续 Channel 事件表示。
 
-命令选项使用固定协议值并在进入 ESL 前严格校验：`FNode.ReadDTMF.action_after` 只允许 `PARK/HANGUP`，`FNode.Play.action_after` 只允许 `NONE/HANGUP`，`FNode.Record.action` 只允许 `START/STOP`。未知值不会降级为挂机或开始录音。`FNode.Transfer` 只接收业务 `target` 与 `context`，Sidecar 校验后生成 `target XML context`，Java 不拼 FreeSWITCH 转接表达式。
+命令选项使用固定协议值并在进入 ESL 前严格校验：`FNode.ReadDTMF.action_after` 只允许 `PARK/HANGUP`，`FNode.Play.action_after` 只允许 `NONE/PARK/HANGUP`，`FNode.Record.action` 只允许 `START/STOP`。未知值不会降级为挂机或开始录音。`FNode.Transfer` 只接收业务 `target` 与 `context`，Sidecar 校验后生成 `target XML context`，Java 不拼 FreeSWITCH 转接表达式。
 
 `FNode.NativeAPI` 是受限逃生通道，不应成为业务调用的常规接口。
 
@@ -105,13 +106,22 @@ Sidecar 向 `fs.event.{nodeId}.{category}` 发布 JSON-RPC Notification：
 
 | Category | Method | 关键内容 |
 | --- | --- | --- |
-| `channel` | `Event.Channel` | Channel UUID、Ctrl ID、状态、方向、号码、context、认证分机、时间和原因 |
-| `dtmf` | `Event.DTMF` | Channel、按键和持续时间 |
+| `channel` | `Event.Channel` | Channel UUID、Ctrl ID、状态、方向、号码、context、认证分机、可信 flow entry、时间和原因 |
+| `dtmf` | `Event.DTMF` | Channel、单个物理按键、`KEY_PRESS` 来源和持续时间 |
+| `command` | `Event.CommandResult` | command、method、最终状态、Channel/Ctrl 关联和结构化结果 |
 | `record` | `Event.Recording` | 开始/停止、文件路径和时长 |
 | `registration` | `Event.Registration` | 分机、域、注册状态、地址和 UA |
 | `gateway` | `Event.Gateway` | 网关、Profile 和状态 |
 
 Channel 状态包括 `START`、`CALLING`、`RINGING`、`ANSWERED`、`MEDIA`、`READY`、`BRIDGE`、`UNBRIDGE` 和 `DESTROY` 的子集，取决于 FreeSWITCH 原始事件。
+
+### 5.1 `0000` 话机绑定入口
+
+FreeSWITCH 必须部署 `examples/freeswitch/dialplan/default/10_fcc_phone_binding.xml`。已认证 SIP 话机命中 `0000` 后，dialplan 设置 `fcc_flow_entry=PHONE_BINDING` 并只执行 `park`。Sidecar 将 `variable_fcc_flow_entry` 与 `variable_sip_auth_username` 分别映射为 `Event.Channel.params.flow_entry` 和 `authenticated_extension`，不判断坐席、不查询 FCC 绑定关系，也不为缺失字段伪造默认值。
+
+`CHANNEL_CREATE` 通常早于 dialplan 的 `set` 动作，因此 Java 不能在 `START` 上建立绑定事实；只有带上述两个参数的 `READY` 才能进入业务校验。Java 下发 `FNode.Answer`，Sidecar 调用 `uuid_answer`；Java 收到独立的 `Event.Channel/ANSWERED` 后再下发 TEXT 类型 `FNode.ReadDTMF`。Sidecar 将原始逐键事件标记为 `KEY_PRESS`，将完整收号通过 `Event.CommandResult.result.dtmf` 返回。换绑结果语音采用 `FNode.Play/PARK`，播放完成结果之后 Java 单独挂机。真实 SIP、TTS、共享目录和 FreeSWITCH 事件顺序仍需目标环境验收。
+
+同步 JSON-RPC 只表示 Sidecar 拒绝、通信未知或 `202/ACCEPTED`。异步 `ReadDTMF/Play` 完成时，Sidecar 以原 `command_id` 发布 `Event.CommandResult`；该结果先写 `EVENT_OUTBOX_DIR`，再写命令 journal 的 final 文件，最后才可能由 Outbox 发布。重启时未发布的 command 事件会先反向修复 final 文件。`FNode.CommandResult` 查询优先读取 final，不把同步受理伪装成最终完成，也不重放命令。
 
 事件含稳定 `event_id`：优先使用 nodeId + Core-UUID + Event-Sequence 的 SHA-256，无源序列时哈希完整原事件。事件先写 EVENT_OUTBOX_DIR，再投递 FCC_EVENTS JetStream，只有 PubAck 后删除本地记录。文件序号保持接收顺序，避免同毫秒事件按哈希乱序。Java 使用持久 Inbox 去重；容量、保留期限和处理失败仍需监控，不能声称无限期不丢事件。
 

@@ -71,3 +71,34 @@ func TestOutboxRestartPreservesIngressOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestOutboxReconcilesCommandResultOnRestart verifies that a crash between
+// event persistence and final journal persistence cannot lose the final fact.
+func TestOutboxReconcilesCommandResultOnRestart(t *testing.T) {
+	root := t.TempDir()
+	out, err := StartEventOutbox(root, nil, "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &event.NormalizedEventResult{
+		Category: "command",
+		EventID:  strings.Repeat("a", 64),
+		RawJSON:  []byte(`{"method":"Event.CommandResult","params":{"command_id":"binding-dtmf-9001"}}`),
+	}
+	if err := out.StoreAndComplete(result, func() error { return os.ErrPermission }); err == nil {
+		t.Fatal("journal failure must stop event processing")
+	}
+	out.Close()
+	replayed := false
+	restarted, err := StartEventOutbox(root, nil, "node-a", func(payload []byte) error {
+		replayed = strings.Contains(string(payload), "binding-dtmf-9001")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.Close()
+	if !replayed {
+		t.Fatal("pending durable event did not reconcile the final command result")
+	}
+}

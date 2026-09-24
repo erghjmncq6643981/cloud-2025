@@ -72,7 +72,7 @@ func main() {
 	case "listen":
 		log.Printf("👂 开始监听集群所有事件 (fs.event.>) 与心跳 (fs.status.>)...")
 
-		// 监听业务事件 (Event.Channel, Event.DTMF, Event.Recording)
+		// 监听业务事件（Event.Channel、Event.CommandResult、Event.DTMF、Event.Recording 等）
 		_, _ = nc.Subscribe("fs.event.>", func(msg *nats.Msg) {
 			var pretty map[string]interface{}
 			if err := json.Unmarshal(msg.Data, &pretty); err == nil {

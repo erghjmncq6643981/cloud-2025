@@ -34,6 +34,15 @@ func (d *Dispatcher) UseCommandJournal(directory string) error {
 	return err
 }
 
+// CompleteCommand records a final application outcome for status queries after
+// the event has first been persisted in the durable event outbox.
+func (d *Dispatcher) CompleteCommand(commandID string, result FNodeResult) error {
+	if d.journal == nil {
+		return fmt.Errorf("command journal is not configured")
+	}
+	return d.journal.Complete(commandID, result)
+}
+
 func NewDispatcher(eslClient *esl.Client, govManager *governance.NodeManager) *Dispatcher {
 	d := &Dispatcher{
 		handlers: make(map[string]MethodHandler),
@@ -85,6 +94,7 @@ func (d *Dispatcher) HandleRaw(data []byte) []byte {
 func (d *Dispatcher) registerMethods() {
 	// FNode 标准规范控制方法
 	d.handlers["FNode.Dial"] = d.handleFNodeDial
+	d.handlers["FNode.Answer"] = d.handleFNodeAnswer
 	d.handlers["FNode.ChannelBridge"] = d.handleFNodeBridge
 	d.handlers["FNode.ReadDTMF"] = d.handleFNodeReadDTMF
 	d.handlers["FNode.Play"] = d.handleFNodePlay

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<include>
+  <extension name="fcc-phone-binding">
+    <condition field="destination_number" expression="^0000$" break="on-false" />
+    <condition field="${sip_auth_username}" expression="^[0-9]{2,20}$">
+      <action application="set" data="fcc_flow_entry=PHONE_BINDING" />
+      <action application="park" />
+      <anti-action application="hangup" data="CALL_REJECTED" />
+    </condition>
+  </extension>
+</include>
