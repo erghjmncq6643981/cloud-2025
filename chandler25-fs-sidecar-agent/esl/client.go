@@ -26,6 +26,7 @@ type Client struct {
 	eventChan  chan map[string]string
 	cmdReplyMu sync.Mutex
 	cmdReplyCh chan apiReply
+	onConnectHandlers []func()
 }
 
 type apiReply struct {
@@ -49,6 +50,13 @@ func (c *Client) EventChannel() <-chan map[string]string {
 	return c.eventChan
 }
 
+// OnConnect 注册连接建立成功后的回调函数
+func (c *Client) OnConnect(fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onConnectHandlers = append(c.onConnectHandlers, fn)
+}
+
 // ConnectAndListen 连接 FreeSWITCH 并开启监听循环，内置自动断线重连
 func (c *Client) ConnectAndListen() error {
 	for {
@@ -67,6 +75,15 @@ func (c *Client) ConnectAndListen() error {
 		}
 
 		log.Printf("✅ [ESL] 成功连接并鉴权 FreeSWITCH: %s", c.addr)
+
+		// 触发连接就绪回调
+		c.mu.Lock()
+		handlers := make([]func(), len(c.onConnectHandlers))
+		copy(handlers, c.onConnectHandlers)
+		c.mu.Unlock()
+		for _, h := range handlers {
+			go h()
+		}
 
 		// 订阅关键呼叫事件 (过滤无意义事件)
 		err = c.subscribeEvents()

@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Config 软交换一体化节点配置
@@ -20,6 +22,8 @@ type Config struct {
 	DispatchIngressEnabled   bool
 	TTSProvider              string
 	TTSWorkDir               string
+	TTSCacheDir              string
+	TTSLocalVoice            string
 	AliyunNLSGatewayURL      string
 	AliyunNLSAppKey          string
 	AliyunNLSAccessKeyID     string
@@ -33,13 +37,22 @@ type Config struct {
 
 // LoadConfig 从环境变量加载配置，带生产级默认值
 func LoadConfig() *Config {
-	hostname, _ := os.Hostname()
-	if hostname == "" {
-		hostname = "telephony-pod-01"
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		hostname, _ := os.Hostname()
+		if idx := strings.Index(hostname, "."); idx > 0 {
+			hostname = hostname[:idx]
+		}
+		if hostname == "" || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(hostname) {
+			hostname = "telephony-pod-01"
+		}
+		nodeID = hostname
 	}
 
+	ttsDir := getEnv("TTS_CACHE_DIR", getEnv("TTS_WORK_DIR", "/tmp/fcc-sidecar/tts"))
+
 	return &Config{
-		NodeID:                   getEnv("NODE_ID", hostname),
+		NodeID:                   nodeID,
 		NatsURL:                  getEnv("NATS_URL", "nats://127.0.0.1:4222"),
 		FSEslAddr:                getEnv("FS_ESL_ADDR", "127.0.0.1:8021"),
 		FSEslPassword:            getEnv("FS_ESL_PASSWORD", "ClueCon"),
@@ -51,7 +64,9 @@ func LoadConfig() *Config {
 		PostgresDSN:              getEnv("PG_DSN", "postgres://freeswitch:123456@127.0.0.1:5432/freeswitch?sslmode=disable"),
 		DispatchIngressEnabled:   getEnvBool("DISPATCH_INGRESS_ENABLED", true),
 		TTSProvider:              getEnv("TTS_PROVIDER", "aliyun_nls"),
-		TTSWorkDir:               getEnv("TTS_WORK_DIR", "./work/tts"),
+		TTSWorkDir:               ttsDir,
+		TTSCacheDir:              ttsDir,
+		TTSLocalVoice:            getEnv("TTS_LOCAL_VOICE", "Tingting"),
 		AliyunNLSGatewayURL:      getEnv("ALIYUN_NLS_GATEWAY_URL", "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1"),
 		AliyunNLSAppKey:          getEnv("ALIYUN_NLS_APP_KEY", ""),
 		AliyunNLSAccessKeyID:     getEnv("ALIYUN_NLS_ACCESS_KEY_ID", ""),

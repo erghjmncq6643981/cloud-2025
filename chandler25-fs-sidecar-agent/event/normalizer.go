@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -37,50 +37,15 @@ type ChannelEventParams struct {
 	Params      map[string]string `json:"params,omitempty"`
 }
 
-// DTMFEventSource identifies the source of a physical Event.DTMF key press.
-// Complete digit collection belongs to Event.CommandResult instead.
-type DTMFEventSource string
-
-const (
-	// DTMFSourceKeyPress represents one raw DTMF key event.
-	DTMFSourceKeyPress DTMFEventSource = "KEY_PRESS"
-)
-
-// CommandResultStatus is the terminal state of one accepted asynchronous
-// command. Acceptance itself is deliberately not a final status.
-type CommandResultStatus string
-
-const (
-	// CommandResultSucceeded reports a completed successful command.
-	CommandResultSucceeded CommandResultStatus = "SUCCEEDED"
-	// CommandResultFailed reports a completed command whose application failed.
-	CommandResultFailed CommandResultStatus = "FAILED"
-)
-
 // DTMFEventParams 标准 Event.DTMF 参数
 type DTMFEventParams struct {
-	NodeID     string          `json:"node_id"`
-	CtrlUUID   string          `json:"ctrl_uuid,omitempty"`
-	UUID       string          `json:"uuid"`
-	Digit      string          `json:"digit"`
-	Source     DTMFEventSource `json:"source"`
-	DurationMs int             `json:"duration_ms"`
-	Timestamp  int64           `json:"timestamp"`
-}
-
-// CommandResultEventParams represents the final result of an asynchronous
-// FNode command and is correlated independently from channel lifecycle events.
-type CommandResultEventParams struct {
-	NodeID        string              `json:"node_id"`
-	CommandID     string              `json:"command_id"`
-	CommandMethod string              `json:"command_method"`
-	CommandStatus CommandResultStatus `json:"command_status"`
-	Code          int                 `json:"code"`
-	Message       string              `json:"message"`
-	CtrlUUID      string              `json:"ctrl_uuid,omitempty"`
-	UUID          string              `json:"uuid,omitempty"`
-	Result        map[string]string   `json:"result,omitempty"`
-	Timestamp     int64               `json:"timestamp"`
+	NodeID     string `json:"node_id"`
+	CtrlUUID   string `json:"ctrl_uuid,omitempty"`
+	UUID       string `json:"uuid"`
+	Digit      string `json:"digit"`
+	DurationMs int    `json:"duration_ms"`
+	Source     string `json:"source"`
+	Timestamp  int64  `json:"timestamp"`
 }
 
 // RecordEventParams 标准 Event.Recording 参数
@@ -123,6 +88,20 @@ type SupervisionEventParams struct {
 	SpyUUID    string `json:"spy_uuid"`
 	TargetUUID string `json:"target_uuid"`
 	Timestamp  int64  `json:"timestamp"`
+}
+
+// CommandResultEventParams 标准 Event.CommandResult 参数
+type CommandResultEventParams struct {
+	NodeID        string      `json:"node_id"`
+	CtrlUUID      string      `json:"ctrl_uuid,omitempty"`
+	UUID          string      `json:"uuid"`
+	CommandID     string      `json:"command_id"`
+	CommandMethod string      `json:"command_method"`
+	CommandStatus string      `json:"command_status"` // SUCCEEDED, FAILED
+	Code          int         `json:"code"`
+	Message       string      `json:"message"`
+	Result        interface{} `json:"result,omitempty"`
+	Timestamp     int64       `json:"timestamp"`
 }
 
 // StandardRpcNotification 标准 JSON-RPC 2.0 通知报文
@@ -396,8 +375,8 @@ func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventRes
 			CtrlUUID:   ctrlUUID,
 			UUID:       uuid,
 			Digit:      raw["DTMF-Digit"],
-			Source:     DTMFSourceKeyPress,
 			DurationMs: dur,
+			Source:     "KEY_PRESS",
 			Timestamp:  nowMs,
 		}
 		notif := StandardRpcNotification{
@@ -417,64 +396,123 @@ func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventRes
 
 	case "CHANNEL_EXECUTE_COMPLETE":
 		app := raw["Application"]
-		commandID := raw["variable_fcc_command_id"]
-		commandMethod := raw["variable_fcc_command_method"]
-		if commandID == "" || commandMethod == "" {
-			return nil
+		cmdID := raw["variable_fcc_cmd_id"]
+		cmdMethod := raw["variable_fcc_cmd_method"]
+		if cmdID != "" {
+			log.Printf("[Normalizer] CHANNEL_EXECUTE_COMPLETE: app=%s cmdID=%s cmdMethod=%s uuid=%s", app, cmdID, cmdMethod, uuid)
 		}
-		if (app != "play_and_get_digits" || commandMethod != "FNode.ReadDTMF") &&
-			(app != "playback" || commandMethod != "FNode.Play") {
-			return nil
-		}
-		response := strings.TrimSpace(raw["Application-Response"])
-		failed := strings.HasPrefix(strings.ToUpper(response), "-ERR") ||
-			strings.HasPrefix(strings.ToUpper(response), "ERROR") ||
-			strings.EqualFold(response, "FILE NOT FOUND")
-		result := map[string]string{}
-		if app == "play_and_get_digits" && !failed {
+
+		if app == "play_and_get_digits" {
 			dtmfVal := raw["variable_dtmf_val"]
 			if dtmfVal == "" {
-				dtmfVal = response
+				dtmfVal = raw["Application-Response"]
 			}
-			if dtmfVal == "_none_" {
-				dtmfVal = ""
+
+			if cmdID != "" {
+				succeeded := dtmfVal != "" && dtmfVal != "_none_"
+				status := "SUCCEEDED"
+				code := 200
+				msg := "OK"
+				var resPayload map[string]interface{}
+				if succeeded {
+					resPayload = map[string]interface{}{"dtmf": dtmfVal}
+				} else {
+					status = "FAILED"
+					code = -32004
+					msg = "NO_DIGITS"
+				}
+
+				if cmdMethod == "" {
+					cmdMethod = "FNode.ReadDTMF"
+				}
+
+				cmdParams := CommandResultEventParams{
+					NodeID:        n.nodeID,
+					CtrlUUID:      ctrlUUID,
+					UUID:          uuid,
+					CommandID:     cmdID,
+					CommandMethod: cmdMethod,
+					CommandStatus: status,
+					Code:          code,
+					Message:       msg,
+					Result:        resPayload,
+					Timestamp:     nowMs,
+				}
+				notif := StandardRpcNotification{
+					JSONRPC: "2.0",
+					Method:  "Event.CommandResult",
+					Params:  cmdParams,
+				}
+				data, _ := json.Marshal(notif)
+				return &NormalizedEventResult{
+					Category:       "command",
+					State:          status,
+					UUID:           uuid,
+					CtrlUUID:       ctrlUUID,
+					RawJSON:        data,
+					IsChannelState: false,
+				}
 			}
-			result["dtmf"] = dtmfVal
+
+			if dtmfVal != "" && dtmfVal != "_none_" {
+				dtmfParams := DTMFEventParams{
+					NodeID:     n.nodeID,
+					CtrlUUID:   ctrlUUID,
+					UUID:       uuid,
+					Digit:      dtmfVal,
+					DurationMs: 100,
+					Source:     "KEY_PRESS",
+					Timestamp:  nowMs,
+				}
+				notif := StandardRpcNotification{
+					JSONRPC: "2.0",
+					Method:  "Event.DTMF",
+					Params:  dtmfParams,
+				}
+				data, _ := json.Marshal(notif)
+				return &NormalizedEventResult{
+					Category:       "dtmf",
+					State:          "DTMF",
+					UUID:           uuid,
+					CtrlUUID:       ctrlUUID,
+					RawJSON:        data,
+					IsChannelState: false,
+				}
+			}
 		}
-		status := CommandResultSucceeded
-		code := 200
-		message := "OK"
-		if failed {
-			status = CommandResultFailed
-			code = -32004
-			message = "FreeSWITCH media application failed"
+
+		if app == "playback" {
+			if cmdID != "" && (cmdMethod == "FNode.Play" || cmdMethod == "") {
+				cmdParams := CommandResultEventParams{
+					NodeID:        n.nodeID,
+					CtrlUUID:      ctrlUUID,
+					UUID:          uuid,
+					CommandID:     cmdID,
+					CommandMethod: "FNode.Play",
+					CommandStatus: "SUCCEEDED",
+					Code:          200,
+					Message:       "OK",
+					Result:        map[string]interface{}{},
+					Timestamp:     nowMs,
+				}
+				notif := StandardRpcNotification{
+					JSONRPC: "2.0",
+					Method:  "Event.CommandResult",
+					Params:  cmdParams,
+				}
+				data, _ := json.Marshal(notif)
+				return &NormalizedEventResult{
+					Category:       "command",
+					State:          "SUCCEEDED",
+					UUID:           uuid,
+					CtrlUUID:       ctrlUUID,
+					RawJSON:        data,
+					IsChannelState: false,
+				}
+			}
 		}
-		commandParams := CommandResultEventParams{
-			NodeID:        n.nodeID,
-			CommandID:     commandID,
-			CommandMethod: commandMethod,
-			CommandStatus: status,
-			Code:          code,
-			Message:       message,
-			CtrlUUID:      ctrlUUID,
-			UUID:          uuid,
-			Result:        result,
-			Timestamp:     nowMs,
-		}
-		notif := StandardRpcNotification{
-			JSONRPC: "2.0",
-			Method:  "Event.CommandResult",
-			Params:  commandParams,
-		}
-		data, _ := json.Marshal(notif)
-		return &NormalizedEventResult{
-			Category:       "command",
-			State:          string(status),
-			UUID:           uuid,
-			CtrlUUID:       ctrlUUID,
-			RawJSON:        data,
-			IsChannelState: false,
-		}
+
+		return nil
 
 	case "RECORD_START":
 		recParams := RecordEventParams{
@@ -560,13 +598,25 @@ func (n *Normalizer) buildChannelParams(raw map[string]string, uuid, ctrlUUID, s
 		endEpoch = endEpoch / 1000000
 	}
 
-	parameters := map[string]string{
-		"authenticated_extension": raw["variable_sip_auth_username"],
-		"sip_user_agent":          raw["variable_sip_user_agent"],
-		"codec":                   raw["variable_read_codec"],
+	dtmfVal := raw["variable_dtmf_val"]
+	if dtmfVal == "_none_" {
+		dtmfVal = ""
 	}
-	if flowEntry := raw["variable_fcc_flow_entry"]; flowEntry != "" {
-		parameters["flow_entry"] = flowEntry
+
+	authExt := raw["variable_sip_auth_username"]
+	if authExt == "" {
+		authExt = raw["variable_sip_from_user"]
+	}
+	if authExt == "" {
+		authExt = raw["Caller-Caller-ID-Number"]
+	}
+	if authExt == "" {
+		authExt = raw["Caller-Username"]
+	}
+
+	flowEntry := raw["variable_fcc_flow_entry"]
+	if flowEntry == "" {
+		flowEntry = raw["fcc_flow_entry"]
 	}
 
 	return ChannelEventParams{
@@ -585,7 +635,13 @@ func (n *Normalizer) buildChannelParams(raw map[string]string, uuid, ctrlUUID, s
 		AnswerEpoch: answerEpoch,
 		EndEpoch:    endEpoch,
 		Timestamp:   nowMs,
-		Params:      parameters,
+		Params: map[string]string{
+			"authenticated_extension": authExt,
+			"flow_entry":              flowEntry,
+			"sip_user_agent":          raw["variable_sip_user_agent"],
+			"codec":                   raw["variable_read_codec"],
+			"dtmf_val":                dtmfVal,
+		},
 	}
 }
 

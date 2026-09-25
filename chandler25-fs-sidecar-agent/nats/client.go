@@ -127,3 +127,39 @@ func (c *Client) Close() {
 		c.nc.Close()
 	}
 }
+
+// EnsureEventsStream 检查并自动创建 FCC_EVENTS JetStream 持久化流
+func (c *Client) EnsureEventsStream() error {
+	if c.nc == nil || c.nc.IsClosed() {
+		return fmt.Errorf("NATS 连接已关闭")
+	}
+
+	js, err := c.nc.JetStream()
+	if err != nil {
+		return fmt.Errorf("获取 JetStream 上下文失败: %w", err)
+	}
+
+	streamName := "FCC_EVENTS"
+	streamInfo, err := js.StreamInfo(streamName)
+	if err == nil {
+		log.Printf("ℹ️ [NATS JetStream] 流 %s 已存在 (subjects=%v)", streamName, streamInfo.Config.Subjects)
+		return nil
+	}
+
+	cfg := &nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{"fs.event.>"},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+		Discard:   nats.DiscardNew,
+		Replicas:  1,
+	}
+
+	info, err := js.AddStream(cfg)
+	if err != nil {
+		return fmt.Errorf("自动创建 JetStream 流 %s 失败: %w", streamName, err)
+	}
+
+	log.Printf("✅ [NATS JetStream] 自动创建流 %s 成功 (subjects=%v)", streamName, info.Config.Subjects)
+	return nil
+}

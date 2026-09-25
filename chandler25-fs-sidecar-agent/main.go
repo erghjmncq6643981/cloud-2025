@@ -64,6 +64,9 @@ func main() {
 		log.Fatalf("❌ [NATS] 客户端初始化失败: %v", err)
 	} else {
 		log.Printf("[NATS] 客户端已初始化，首次连接失败时自动重连并恢复订阅")
+		if err := natsClient.EnsureEventsStream(); err != nil {
+			log.Printf("⚠️ [NATS JetStream] 检查/创建 FCC_EVENTS 流警告: %v", err)
+		}
 		if err := natsClient.StartListeningRPC(); err != nil {
 			log.Fatalf("❌ [NATS] 监听 RPC 命令失败: %v", err)
 		}
@@ -106,7 +109,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("[启动] 事件持久目录不可用: %v", err)
 	}
+
+	// 5.6 初始化 FreeSWITCH 网络自愈器 (网络切换自动检测与 Profile 热重载)
+	healer := governance.NewNetworkHealer(eslClient)
+	eslClient.OnConnect(func() {
+		if healed, err := healer.ReconcileAndHeal(); err != nil {
+			log.Printf("⚠️ [网络自愈] ESL 连接触发自愈检查异常: %v", err)
+		} else if healed {
+			log.Printf("🩺 [网络自愈] ESL 连接时已自动完成 FreeSWITCH 网络与 Profile 校准")
+		}
+	})
+
 	httpServer := api.NewServer(cfg, gov, eslClient, repo)
+	httpServer.SetNetworkHealer(healer)
 	go func() {
 		if err := httpServer.Start(); err != nil {
 			log.Printf("❌ [HTTP] HTTP 管理服务异常: %v", err)
@@ -150,10 +165,13 @@ func main() {
 		}
 	}()
 
-	// 8. 启动周期心跳上报任务
+	// 8. 启动周期心跳上报任务与网络自愈检测
 	ticker := time.NewTicker(time.Duration(cfg.HeartbeatIntervalSec) * time.Second)
 	go func() {
 		for range ticker.C {
+			// 定期巡检网络 IP 是否变动并自愈
+			_, _ = healer.ReconcileAndHeal()
+
 			// 并发事件修改时丢弃旧快照，下轮重试；查询失败不清空存量话道。
 			revision := gov.ChannelRevision()
 			channels, snapshotErr := eslClient.ChannelUUIDs()

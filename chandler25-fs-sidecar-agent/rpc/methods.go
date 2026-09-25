@@ -4,6 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -126,6 +129,7 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 	}
 	vars = append(vars, fmt.Sprintf("originate_timeout=%d", p.Timeout))
 	vars = append(vars, fmt.Sprintf("ringback='%s'", p.Ringback))
+	vars = append(vars, "loopback_bowout='false'")
 
 	if callVars["absolute_codec_string"] == "" && (p.ExtraVars == nil || p.ExtraVars["absolute_codec_string"] == "") {
 		vars = append(vars, "absolute_codec_string='PCMU,PCMA'")
@@ -165,7 +169,6 @@ func (d *Dispatcher) handleFNodeDial(req *JsonRpcRequest) *JsonRpcResponse {
 
 var dialTargetPattern = regexp.MustCompile(`^[+0-9A-Za-z*#_.-]{1,128}$`)
 var dialContextPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
-var commandIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
 // resolveDialDestination 将业务号码与受控 context 转换为节点侧 FreeSWITCH 拨号表达式。
 func resolveDialDestination(dialTarget, dialContext string) (string, error) {
@@ -199,37 +202,27 @@ func newChannelUUID() string {
 	)
 }
 
-// FNodeAnswerParams defines the channel identity required by FNode.Answer.
+// --- 1.5 FNode.Answer (话道应答) ---
 type FNodeAnswerParams struct {
 	CtrlUUID string `json:"ctrl_uuid"`
 	UUID     string `json:"uuid"`
 }
 
-// handleFNodeAnswer accepts an inbound channel. The synchronous reply only
-// confirms command handling; Event.Channel/ANSWERED remains the channel fact.
 func (d *Dispatcher) handleFNodeAnswer(req *JsonRpcRequest) *JsonRpcResponse {
 	var p FNodeAnswerParams
 	if err := json.Unmarshal(req.Params, &p); err != nil || p.UUID == "" {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing required param: uuid", nil)
 	}
-	if !commandIDPattern.MatchString(p.UUID) ||
-		(p.CtrlUUID != "" && !commandIDPattern.MatchString(p.CtrlUUID)) {
-		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Unsafe channel or control identifier", nil)
-	}
-	if p.CtrlUUID != "" {
-		setResult, err := d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s ctrl_uuid %s", p.UUID, p.CtrlUUID))
-		if err != nil || !strings.HasPrefix(setResult, "+OK") {
-			return NewErrorResponse(req.ID, ErrCodeInternalError, "Cannot set answer control identity", nil)
-		}
-	}
+
 	res, err := d.esl.ExecuteAPI("uuid_answer", p.UUID)
 	if err != nil {
-		return NewErrorResponse(req.ID, ErrCodeInternalError, err.Error(), nil)
+		return NewErrorResponse(req.ID, ErrCodeMediaError, err.Error(), nil)
 	}
 	if !strings.HasPrefix(res, "+OK") {
-		return NewErrorResponse(req.ID, ErrCodeInternalError, "Answer failed: "+res, map[string]string{"raw": res})
+		return NewErrorResponse(req.ID, ErrCodeMediaError, "Answer failed: "+res, map[string]string{"raw": res})
 	}
-	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "ACCEPTED")
+
+	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 200, "OK")
 }
 
 // --- 2. FNode.ChannelBridge (话道桥接) ---
@@ -344,37 +337,44 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 	if digitTimeout <= 0 {
 		digitTimeout = 2000
 	}
-	intervalSilence := fmt.Sprintf("silence_stream://%d", timeout)
+	intervalSilence := "silence_stream://250"
 
 	actionAfter, actionErr := readDTMFPostAction(p.ActionAfter)
 	if actionErr != nil {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, actionErr.Error(), nil)
 	}
 
-	commandID, commandErr := requestCommandID(req.ID)
-	if commandErr != nil {
-		return NewErrorResponse(req.ID, ErrCodeInvalidRequest, commandErr.Error(), nil)
-	}
-	if !commandIDPattern.MatchString(p.UUID) ||
-		(p.CtrlUUID != "" && !commandIDPattern.MatchString(p.CtrlUUID)) {
-		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Unsafe channel or control identifier", nil)
-	}
-	prefix := commandContextApplications(commandID, "FNode.ReadDTMF", p.CtrlUUID)
 	var inlineApp string
+	cmdPrefix := ""
+	if req.ID != nil {
+		cmdIDStr := fmt.Sprintf("%v", req.ID)
+		if cmdIDStr != "" {
+			cmdPrefix = fmt.Sprintf("set:fcc_cmd_id=%s,set:fcc_cmd_method=FNode.ReadDTMF,", cmdIDStr)
+			if p.CtrlUUID != "" {
+				cmdPrefix += fmt.Sprintf("set:ctrl_uuid=%s,", p.CtrlUUID)
+			}
+			_, _ = d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s fcc_cmd_id %s", p.UUID, cmdIDStr))
+			_, _ = d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s fcc_cmd_method FNode.ReadDTMF", p.UUID))
+			if p.CtrlUUID != "" {
+				_, _ = d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s ctrl_uuid %s", p.UUID, p.CtrlUUID))
+			}
+		}
+	}
+
 	if actionAfter == "park" {
 		// 导航收号等中间流程：收号完成/超时后转入 park 驻留，等待后续路由桥接
-		inlineApp = fmt.Sprintf("%s,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,park",
-			prefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
+		inlineApp = fmt.Sprintf("%splay_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,park",
+			cmdPrefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
 	} else {
 		// 满意度评价等收尾流程：支持播报致谢语并挂机
 		thankYouAudio := p.ThankYouFile
 
 		if thankYouAudio != "" {
-			inlineApp = fmt.Sprintf("%s,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",
-				prefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout, thankYouAudio)
+			inlineApp = fmt.Sprintf("%splay_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,playback:%s,hangup:NORMAL_CLEARING",
+				cmdPrefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout, thankYouAudio)
 		} else {
-			inlineApp = fmt.Sprintf("%s,play_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,hangup:NORMAL_CLEARING",
-				prefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
+			inlineApp = fmt.Sprintf("%splay_and_get_digits:%d %d %d %d %s %s %s dtmf_val %s %d,hangup:NORMAL_CLEARING",
+				cmdPrefix, p.MinDigits, p.MaxDigits, tries, timeout, p.Terminators, audioSrc, intervalSilence, regex, digitTimeout)
 		}
 	}
 
@@ -387,7 +387,7 @@ func (d *Dispatcher) handleFNodeReadDTMF(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeMediaError, "ReadDTMF failed: "+res, map[string]string{"raw": res})
 	}
 
-	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "ACCEPTED")
+	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "OK")
 }
 
 // readDTMFPostAction validates the small protocol vocabulary before any ESL
@@ -428,21 +428,19 @@ func (d *Dispatcher) handleFNodePlay(req *JsonRpcRequest) *JsonRpcResponse {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Missing media/data or file_path", nil)
 	}
 
-	commandID, commandIDErr := requestCommandID(req.ID)
-	if commandIDErr != nil {
-		return NewErrorResponse(req.ID, ErrCodeInvalidRequest, commandIDErr.Error(), nil)
+	var cmdIDStr string
+	if req.ID != nil {
+		cmdIDStr = fmt.Sprintf("%v", req.ID)
+		if cmdIDStr != "" {
+			_, _ = d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s fcc_cmd_id %s", p.UUID, cmdIDStr))
+			_, _ = d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s fcc_cmd_method FNode.Play", p.UUID))
+			if p.CtrlUUID != "" {
+				_, _ = d.esl.ExecuteAPI("uuid_setvar", fmt.Sprintf("%s ctrl_uuid %s", p.UUID, p.CtrlUUID))
+			}
+		}
 	}
-	if !commandIDPattern.MatchString(p.UUID) ||
-		(p.CtrlUUID != "" && !commandIDPattern.MatchString(p.CtrlUUID)) {
-		return NewErrorResponse(req.ID, ErrCodeInvalidParams, "Unsafe channel or control identifier", nil)
-	}
-	command, args, commandErr := playCommand(
-		p.UUID,
-		audioSrc,
-		p.ActionAfter,
-		commandID,
-		p.CtrlUUID,
-	)
+
+	command, args, commandErr := playCommand(p.UUID, audioSrc, p.ActionAfter, cmdIDStr, p.CtrlUUID)
 	if commandErr != nil {
 		return NewErrorResponse(req.ID, ErrCodeInvalidParams, commandErr.Error(), nil)
 	}
@@ -450,17 +448,21 @@ func (d *Dispatcher) handleFNodePlay(req *JsonRpcRequest) *JsonRpcResponse {
 	if err != nil {
 		return NewErrorResponse(req.ID, ErrCodeMediaError, err.Error(), nil)
 	}
-	if !strings.HasPrefix(res, "+OK") {
-		return NewErrorResponse(req.ID, ErrCodeMediaError, "Play failed: "+res, nil)
-	}
 
-	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 202, "ACCEPTED")
+	return NewFNodeSuccessResponse(req.ID, d.gov.NodeID(), p.UUID, p.CtrlUUID, 200, res)
 }
 
 // playCommand maps the protocol-level post action to one atomic FreeSWITCH
 // execution. HANGUP uses an inline transfer so the channel is not torn down
 // before playback finishes; ordinary playback remains non-blocking.
-func playCommand(uuid, audioSrc, actionAfter, commandID, ctrlUUID string) (string, string, error) {
+func playCommand(uuid, audioSrc, actionAfter, cmdID, ctrlUUID string) (string, string, error) {
+	cmdPrefix := ""
+	if cmdID != "" {
+		cmdPrefix = fmt.Sprintf("set:fcc_cmd_id=%s,set:fcc_cmd_method=FNode.Play,", cmdID)
+		if ctrlUUID != "" {
+			cmdPrefix += fmt.Sprintf("set:ctrl_uuid=%s,", ctrlUUID)
+		}
+	}
 	switch strings.ToUpper(strings.TrimSpace(actionAfter)) {
 	case "", "NONE":
 		return "uuid_broadcast", fmt.Sprintf("%s %s both", uuid, audioSrc), nil
@@ -468,61 +470,71 @@ func playCommand(uuid, audioSrc, actionAfter, commandID, ctrlUUID string) (strin
 		return "uuid_transfer", fmt.Sprintf(
 			"%s '%s' inline",
 			uuid,
-			fmt.Sprintf(
-				"%s,playback:%s,park",
-				commandContextApplications(commandID, "FNode.Play", ctrlUUID),
-				audioSrc,
-			),
+			fmt.Sprintf("%splayback:%s,park", cmdPrefix, audioSrc),
 		), nil
 	case "HANGUP":
 		return "uuid_transfer", fmt.Sprintf(
 			"%s '%s' inline",
 			uuid,
-			fmt.Sprintf(
-				"%s,playback:%s,hangup:NORMAL_CLEARING",
-				commandContextApplications(commandID, "FNode.Play", ctrlUUID),
-				audioSrc,
-			),
+			fmt.Sprintf("%splayback:%s,hangup:NORMAL_CLEARING", cmdPrefix, audioSrc),
 		), nil
 	default:
 		return "", "", fmt.Errorf("unsupported action_after: %s", actionAfter)
 	}
 }
 
-// requestCommandID validates the JSON-RPC identifier used to correlate a
-// later Event.CommandResult with the original command.
-func requestCommandID(value interface{}) (string, error) {
-	commandID, ok := value.(string)
-	if !ok || !commandIDPattern.MatchString(commandID) {
-		return "", fmt.Errorf("command id must be a safe non-empty string")
+func findLocalSoundFallback(text string) string {
+	soundDir := "/opt/homebrew/Cellar/freeswitch/1.11.3/share/freeswitch/sounds"
+	if _, err := os.Stat(soundDir); err != nil {
+		return ""
 	}
-	return commandID, nil
-}
-
-// commandContextApplications creates controlled inline set applications.
-// Command and control identifiers are data, never caller-provided ESL syntax.
-func commandContextApplications(commandID, method, ctrlUUID string) string {
-	applications := []string{
-		"set:fcc_command_id=" + commandID,
-		"set:fcc_command_method=" + method,
+	if strings.Contains(text, "成功") {
+		p := filepath.Join(soundDir, "ivr_bind_success.wav")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
-	if ctrlUUID != "" {
-		applications = append(applications, "set:ctrl_uuid="+ctrlUUID)
+	if strings.Contains(text, "失败") {
+		p := filepath.Join(soundDir, "ivr_bind_fail.wav")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
-	return strings.Join(applications, ",")
+	if strings.Contains(text, "工号") || strings.Contains(text, "输入") {
+		p := filepath.Join(soundDir, "ivr_bind_input.wav")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // resolveMedia turns FILE data into a path and TEXT data into a provider-owned
 // shared file. Provider-specific fields stay inside the Sidecar boundary.
 func (d *Dispatcher) resolveMedia(media MediaInfo, explicitPath string) (string, error) {
 	if strings.EqualFold(media.Type, "TEXT") {
-		if d.mediaResolver == nil {
-			return "", fmt.Errorf("text media requires configured tts provider")
-		}
 		if strings.TrimSpace(media.Data) == "" {
 			return "", fmt.Errorf("text media data is empty")
 		}
-		return d.mediaResolver.Resolve(media.Data, "")
+		var ttsErr error
+		if d.mediaResolver != nil {
+			path, err := d.mediaResolver.Resolve(media.Data, "")
+			if err == nil && path != "" {
+				return path, nil
+			}
+			ttsErr = err
+		}
+		if fallback := findLocalSoundFallback(media.Data); fallback != "" {
+			log.Printf("⚠️ [媒体解析] 使用本地离线提示音替代 TTS: text=%q -> file=%s", media.Data, fallback)
+			return fallback, nil
+		}
+		if ttsErr != nil {
+			return "", fmt.Errorf("tts resolve error: %w", ttsErr)
+		}
+		if d.mediaResolver == nil {
+			return "", fmt.Errorf("text media requires configured tts provider")
+		}
+		return "", fmt.Errorf("unable to resolve text media")
 	}
 	path := explicitPath
 	if path == "" {

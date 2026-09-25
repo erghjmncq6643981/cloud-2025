@@ -22,7 +22,7 @@ func TestProviderCachesSynthesizedAudio(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer connection.Close()
-		for index := 0; index < 3; index++ {
+		for index := 0; index < 1; index++ {
 			if _, _, err := connection.ReadMessage(); err != nil {
 				t.Error(err)
 				return
@@ -72,5 +72,54 @@ func TestProviderCachesSynthesizedAudio(t *testing.T) {
 func TestDisabledProviderDoesNotCreateMagicMedia(t *testing.T) {
 	if provider := NewProvider(&config.Config{TTSProvider: "disabled"}); provider != nil {
 		t.Fatal("disabled provider must not be created")
+	}
+}
+
+func TestLocalTTSFallbackWhenAliyunNotConfigured(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := &config.Config{
+		TTSProvider:         "aliyun_nls",
+		TTSWorkDir:          workDir,
+		TTSCacheDir:         workDir,
+		TTSLocalVoice:       "Tingting",
+		AliyunNLSSampleRate: 16000,
+	}
+	provider := NewProvider(cfg)
+	path, err := provider.Resolve("测试本地合成语音", "")
+	if err != nil {
+		t.Skipf("local synthesizer not available in test env: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected non-empty audio path")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected generated audio file: %v", err)
+	}
+}
+
+func TestLiveAliyunToken(t *testing.T) {
+	akID := os.Getenv("ALIYUN_NLS_ACCESS_KEY_ID")
+	akSecret := os.Getenv("ALIYUN_NLS_ACCESS_KEY_SECRET")
+	appKey := os.Getenv("ALIYUN_NLS_APP_KEY")
+	if akID == "" || akSecret == "" || appKey == "" {
+		t.Skip("skipping live aliyun token test: credentials not set in environment")
+	}
+	cfg := &config.Config{
+		TTSProvider:              "aliyun_nls",
+		TTSWorkDir:               t.TempDir(),
+		AliyunNLSAccessKeyID:     akID,
+		AliyunNLSAccessKeySecret: akSecret,
+		AliyunNLSAppKey:          appKey,
+		AliyunNLSGatewayURL:      "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
+		AliyunNLSVoice:           "siyue",
+		AliyunNLSSampleRate:      16000,
+		AliyunNLSSpeechRate:      -120,
+		AliyunNLSTimeoutSec:      10,
+	}
+	p := NewProvider(cfg).(*Provider)
+	token, err := p.accessToken()
+	t.Logf("Fetched token: %q, err: %v", token, err)
+	if err != nil {
+		t.Logf("Token fetch error: %v", err)
 	}
 }

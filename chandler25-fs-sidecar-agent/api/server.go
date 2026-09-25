@@ -57,6 +57,13 @@ func NewServer(cfg *config.Config, gov *governance.NodeManager, eslClient *esl.C
 	return s
 }
 
+// SetNetworkHealer 为管理服务注入网络自愈器
+func (s *Server) SetNetworkHealer(healer *governance.NetworkHealer) {
+	if s.telephony != nil {
+		s.telephony.SetNetworkHealer(healer)
+	}
+}
+
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/extensions", s.handleExtensions)
 	s.mux.HandleFunc("/api/v1/health", s.handleHealth)

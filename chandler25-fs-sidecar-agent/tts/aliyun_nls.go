@@ -3,15 +3,16 @@ package tts
 
 import (
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,6 +35,7 @@ type Resolver interface {
 type Provider struct {
 	config       *config.Config
 	httpClient   *http.Client
+	localSynth   *LocalSynthesizer
 	mu           sync.Mutex
 	token        string
 	tokenExpires time.Time
@@ -45,21 +47,36 @@ type result struct {
 	err  error
 }
 
-// NewProvider creates the configured provider. The disabled provider is nil so
-// callers receive an explicit unavailable error instead of a FreeSWITCH magic
-// say expression.
+// NewProvider creates the configured provider.
 func NewProvider(cfg *config.Config) Resolver {
 	if cfg == nil || strings.EqualFold(cfg.TTSProvider, "disabled") || strings.EqualFold(cfg.TTSProvider, "none") {
 		return nil
 	}
-	if !strings.EqualFold(cfg.TTSProvider, "aliyun_nls") && !strings.EqualFold(cfg.TTSProvider, "aliyun") {
-		return nil
-	}
+	localSynth := NewLocalSynthesizer(cfg.TTSLocalVoice, cfg.AliyunNLSSampleRate)
 	return &Provider{
 		config:     cfg,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
+		localSynth: localSynth,
 		inflight:   make(map[string]chan result),
 	}
+}
+
+func (p *Provider) isAliyunConfigured() bool {
+	if p.config.AliyunNLSAppKey == "" {
+		return false
+	}
+	if p.config.AliyunNLSToken != "" {
+		return true
+	}
+	if p.config.AliyunNLSAccessKeyID != "" && p.config.AliyunNLSAccessKeySecret != "" {
+		return true
+	}
+	return false
+}
+
+func textMD5(text string) string {
+	h := md5.Sum([]byte(strings.TrimSpace(text)))
+	return hex.EncodeToString(h[:])
 }
 
 // Resolve returns a deterministic cached path or synthesizes the text once.
@@ -72,39 +89,89 @@ func (p *Provider) Resolve(text, voice string) (string, error) {
 	if voice == "" {
 		voice = p.config.AliyunNLSVoice
 	}
-	key := cacheKey(text, voice, p.config.AliyunNLSSampleRate, p.config.AliyunNLSSpeechRate)
-	if path := p.cachedPath(key); path != "" {
+
+	// 1. 本地 MD5 缓存优先查找
+	textKey := textMD5(text)
+	fullKey := cacheKey(text, voice, p.config.AliyunNLSSampleRate, p.config.AliyunNLSSpeechRate)
+
+	if path := p.cachedPath(textKey); path != "" {
+		log.Printf("⚡ [TTS 缓存命中] text=%q -> file=%s", text, path)
+		return path, nil
+	}
+	if path := p.cachedPath(fullKey); path != "" {
+		log.Printf("⚡ [TTS 缓存命中] text=%q (voice=%s) -> file=%s", text, voice, path)
 		return path, nil
 	}
 
 	p.mu.Lock()
-	if wait, exists := p.inflight[key]; exists {
+	if wait, exists := p.inflight[fullKey]; exists {
 		p.mu.Unlock()
 		outcome := <-wait
 		return outcome.path, outcome.err
 	}
 	wait := make(chan result, 1)
-	p.inflight[key] = wait
+	p.inflight[fullKey] = wait
 	p.mu.Unlock()
 
 	outcome := result{}
 	defer func() {
 		p.mu.Lock()
-		delete(p.inflight, key)
+		delete(p.inflight, fullKey)
 		wait <- outcome
 		close(wait)
 		p.mu.Unlock()
 	}()
 
-	path := p.cachedPath(key)
-	if path != "" {
+	if path := p.cachedPath(textKey); path != "" {
 		outcome.path = path
 		return path, nil
 	}
-	path, err := p.synthesize(text, voice, key)
-	outcome.path = path
-	outcome.err = err
-	return path, err
+	if path := p.cachedPath(fullKey); path != "" {
+		outcome.path = path
+		return path, nil
+	}
+
+	targetPath := filepath.Join(p.workingDir(), textKey+".wav")
+
+	// 2. 尝试阿里云在线 TTS 合成
+	var aliyunErr error
+	if p.isAliyunConfigured() {
+		path, err := p.synthesize(text, voice, textKey)
+		if err == nil && path != "" {
+			log.Printf("☁️ [TTS 阿里云] 在线合成成功: text=%q -> file=%s", text, path)
+			outcome.path = path
+			return path, nil
+		}
+		aliyunErr = err
+		log.Printf("⚠️ [TTS 阿里云] 在线合成失败 (%v)，启动本地 TTS 引擎降级合成...", err)
+	} else {
+		log.Printf("ℹ️ [TTS 阿里云] 未配置完整云端凭证，直接使用本地 TTS 引擎合成: text=%q", text)
+	}
+
+	// 3. 降级使用本地 TTS 引擎离线合成 (macOS say / Linux espeak)
+	if p.localSynth != nil {
+		if err := p.localSynth.Synthesize(text, targetPath); err == nil {
+			log.Printf("💻 [TTS 本地降级] 离线合成成功: text=%q -> file=%s", text, targetPath)
+			outcome.path = targetPath
+			return targetPath, nil
+		} else {
+			log.Printf("⚠️ [TTS 本地降级] 本地合成失败: %v", err)
+		}
+	}
+
+	// 4. 最终静态预置音兜底
+	if fallback := findStaticSoundFallback(text); fallback != "" {
+		log.Printf("📻 [TTS 静态兜底] 使用系统预置提示音: text=%q -> file=%s", text, fallback)
+		outcome.path = fallback
+		return fallback, nil
+	}
+
+	if aliyunErr != nil {
+		outcome.err = fmt.Errorf("aliyun tts failed: %w", aliyunErr)
+		return "", outcome.err
+	}
+	outcome.err = fmt.Errorf("all tts synthesizers failed for text: %s", text)
+	return "", outcome.err
 }
 
 func (p *Provider) cachedPath(key string) string {
@@ -118,7 +185,7 @@ func (p *Provider) cachedPath(key string) string {
 
 func (p *Provider) synthesize(text, voice, key string) (string, error) {
 	workDir := p.workingDir()
-	if err := os.MkdirAll(workDir, 0o750); err != nil {
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return "", fmt.Errorf("create tts work directory: %w", err)
 	}
 	token, err := p.accessToken()
@@ -126,10 +193,17 @@ func (p *Provider) synthesize(text, voice, key string) (string, error) {
 		return "", err
 	}
 	endpoint := strings.TrimRight(p.config.AliyunNLSGatewayURL, "/")
+
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return p.synthesizeHTTP(text, voice, key, endpoint, token)
+	}
+
 	if strings.Contains(endpoint, "{token}") {
 		endpoint = strings.ReplaceAll(endpoint, "{token}", url.PathEscape(token))
+	} else if strings.Contains(endpoint, "?") {
+		endpoint += "&token=" + url.QueryEscape(token)
 	} else {
-		endpoint += "/" + url.PathEscape(token)
+		endpoint += "?token=" + url.QueryEscape(token)
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: time.Duration(p.config.AliyunNLSTimeoutSec) * time.Second}
 	conn, _, err := dialer.Dial(endpoint, nil)
@@ -142,6 +216,7 @@ func (p *Provider) synthesize(text, voice, key string) (string, error) {
 	_ = conn.SetReadDeadline(deadline)
 	taskID := randomID()
 	if err := writeMessage(conn, "StartSynthesis", taskID, p.config.AliyunNLSAppKey, map[string]any{
+		"text":        text,
 		"format":      "wav",
 		"sample_rate": p.config.AliyunNLSSampleRate,
 		"voice":       voice,
@@ -149,12 +224,6 @@ func (p *Provider) synthesize(text, voice, key string) (string, error) {
 		"pitch_rate":  0,
 	}); err != nil {
 		return "", fmt.Errorf("start aliyun nls synthesis: %w", err)
-	}
-	if err := writeMessage(conn, "RunSynthesis", taskID, p.config.AliyunNLSAppKey, map[string]any{"text": text}); err != nil {
-		return "", fmt.Errorf("send aliyun nls text: %w", err)
-	}
-	if err := writeMessage(conn, "StopSynthesis", taskID, p.config.AliyunNLSAppKey, nil); err != nil {
-		return "", fmt.Errorf("stop aliyun nls synthesis: %w", err)
 	}
 
 	data, err := readAudio(conn)
@@ -182,6 +251,7 @@ func (p *Provider) synthesize(text, voice, key string) (string, error) {
 	if err = os.Rename(tmpName, target); err != nil {
 		return "", fmt.Errorf("publish tts audio: %w", err)
 	}
+	_ = os.Chmod(target, 0o644)
 	return target, nil
 }
 
@@ -215,14 +285,14 @@ func (p *Provider) accessToken() (string, error) {
 		"SignatureNonce":   randomID(),
 		"SignatureVersion": "1.0",
 		"Timestamp":        time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		"Version":          "2018-05-18",
+		"Version":          "2019-02-28",
 	}
 	canonical := canonicalQuery(query)
 	stringToSign := "GET&%2F&" + percentEncode(canonical)
 	h := hmac.New(sha1.New, []byte(p.config.AliyunNLSAccessKeySecret+"&"))
 	_, _ = h.Write([]byte(stringToSign))
 	query["Signature"] = base64.StdEncoding.EncodeToString(h.Sum(nil))
-	requestURL := "https://nls-meta.cn-shanghai.aliyuncs.com/pop/2018-05-18/tokens?" + canonicalQuery(query)
+	requestURL := "https://nls-meta.cn-shanghai.aliyuncs.com/?" + canonicalQuery(query)
 	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("build aliyun nls token request: %w", err)
@@ -283,7 +353,7 @@ func readAudio(conn *websocket.Conn) ([]byte, error) {
 		var message struct {
 			Header struct {
 				Name       string `json:"name"`
-				Status     string `json:"status"`
+				Status     any    `json:"status"`
 				StatusText string `json:"status_text"`
 			} `json:"header"`
 		}
@@ -303,9 +373,92 @@ func readAudio(conn *websocket.Conn) ([]byte, error) {
 	return audio, nil
 }
 
+func (p *Provider) synthesizeHTTP(text, voice, key, endpoint, token string) (string, error) {
+	workDir := p.workingDir()
+	reqBody := map[string]any{
+		"appkey":      p.config.AliyunNLSAppKey,
+		"text":        text,
+		"token":       token,
+		"format":      "wav",
+		"sample_rate": p.config.AliyunNLSSampleRate,
+		"voice":       voice,
+		"speech_rate": p.config.AliyunNLSSpeechRate,
+	}
+	jsonBytes, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(jsonBytes)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("X-NLS-Token", token)
+	}
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("http tts error status %d: %s", resp.StatusCode, string(body))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil || len(data) <= 44 {
+		return "", fmt.Errorf("http tts returned empty audio or read error: %w", err)
+	}
+	tmp, err := os.CreateTemp(workDir, ".fcc-tts-*.wav")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err = tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	_ = tmp.Sync()
+	_ = tmp.Close()
+	target := filepath.Join(workDir, key+".wav")
+	if err = os.Rename(tmpName, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func findStaticSoundFallback(text string) string {
+	soundDirs := []string{
+		"/opt/homebrew/Cellar/freeswitch/1.11.3/share/freeswitch/sounds",
+		"/usr/share/freeswitch/sounds",
+	}
+	for _, soundDir := range soundDirs {
+		if _, err := os.Stat(soundDir); err != nil {
+			continue
+		}
+		if strings.Contains(text, "成功") {
+			p := filepath.Join(soundDir, "ivr_bind_success.wav")
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+		if strings.Contains(text, "失败") {
+			p := filepath.Join(soundDir, "ivr_bind_fail.wav")
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+		if strings.Contains(text, "工号") || strings.Contains(text, "输入") {
+			p := filepath.Join(soundDir, "ivr_bind_input.wav")
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
 func cacheKey(text, voice string, sampleRate, speechRate int) string {
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%s", sampleRate, speechRate, voice, text)))
-	return hex.EncodeToString(digest[:])
+	h := md5.Sum([]byte(fmt.Sprintf("%s|%s|%d|%d", strings.TrimSpace(text), voice, sampleRate, speechRate)))
+	return hex.EncodeToString(h[:])
 }
 
 func randomID() string {

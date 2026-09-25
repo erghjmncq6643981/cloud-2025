@@ -23,6 +23,7 @@ type TelephonyHandler struct {
 	repo       *db.Repository
 	gov        *governance.NodeManager
 	eslClient  *esl.Client
+	healer     *governance.NetworkHealer
 	scriptPath string
 }
 
@@ -34,6 +35,11 @@ func NewTelephonyHandler(repo *db.Repository, gov *governance.NodeManager, eslCl
 		eslClient:  eslClient,
 		scriptPath: scriptPath,
 	}
+}
+
+// SetNetworkHealer 设置网络自愈器
+func (h *TelephonyHandler) SetNetworkHealer(healer *governance.NetworkHealer) {
+	h.healer = healer
 }
 
 // HandleStatus 系统运行状态透视 (大盘概览)
@@ -593,6 +599,13 @@ func (h *TelephonyHandler) HandleSofiaProfiles(w http.ResponseWriter, r *http.Re
 	profiles := make([]map[string]interface{}, 0, 2)
 	for _, name := range []string{"internal", "external"} {
 		raw, err := h.eslClient.ExecuteAPI("sofia", "status profile "+name)
+		if err != nil || strings.Contains(strings.ToLower(raw), "invalid profile") || strings.HasPrefix(strings.TrimSpace(raw), "-ERR") {
+			if h.healer != nil {
+				if healed, _ := h.healer.ReconcileAndHeal(); healed {
+					raw, err = h.eslClient.ExecuteAPI("sofia", "status profile "+name)
+				}
+			}
+		}
 		if err != nil || strings.Contains(strings.ToLower(raw), "invalid profile") || strings.HasPrefix(strings.TrimSpace(raw), "-ERR") {
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": 502, "error": "Sofia Profile 查询失败"})
