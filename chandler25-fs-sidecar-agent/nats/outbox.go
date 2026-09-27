@@ -31,8 +31,10 @@ type outboxEvent struct {
 	ID       string          `json:"id"`
 }
 
-// StartEventOutbox initializes the event outbox and ensures the FCC_EVENTS stream is ready.
-func StartEventOutbox(root string, client *Client, nodeID string) (*EventOutbox, error) {
+// StartEventOutbox requires a provisioned FCC_EVENTS stream. A command-result
+// callback reconciles durable pending events with the local command journal
+// before publication resumes after a crash.
+func StartEventOutbox(root string, client *Client, nodeID string, reconcile ...func([]byte) error) (*EventOutbox, error) {
 	if root == "" {
 		return nil, fmt.Errorf("EVENT_OUTBOX_DIR is required")
 	}
@@ -54,6 +56,22 @@ func StartEventOutbox(root string, client *Client, nodeID string) (*EventOutbox,
 		if err == nil && order > out.lastOrder {
 			out.lastOrder = order
 		}
+		if len(reconcile) == 0 || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(root, entry.Name()))
+		if readErr != nil {
+			return nil, readErr
+		}
+		var item outboxEvent
+		if decodeErr := json.Unmarshal(data, &item); decodeErr != nil {
+			return nil, decodeErr
+		}
+		if item.Category == "command" {
+			if replayErr := reconcile[0](item.Data); replayErr != nil {
+				return nil, replayErr
+			}
+		}
 	}
 	go out.run()
 	return out, nil
@@ -61,6 +79,12 @@ func StartEventOutbox(root string, client *Client, nodeID string) (*EventOutbox,
 
 // Store synchronously flushes the normalized envelope; a disk error must stop ingress.
 func (o *EventOutbox) Store(e *event.NormalizedEventResult) error {
+	return o.StoreAndComplete(e, nil)
+}
+
+// StoreAndComplete prevents publication of a newly stored command-result event
+// until its matching local final-result journal entry has been flushed.
+func (o *EventOutbox) StoreAndComplete(e *event.NormalizedEventResult, complete func() error) error {
 	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(e.EventID) {
 		return fmt.Errorf("invalid source event identity")
 	}
@@ -95,9 +119,18 @@ func (o *EventOutbox) Store(e *event.NormalizedEventResult) error {
 	o.lastOrder = order
 	target := filepath.Join(o.root, fmt.Sprintf("%020d-%s.json", order, e.EventID))
 	if _, err = os.Stat(target); err == nil {
+		if complete != nil {
+			return complete()
+		}
 		return nil
 	}
-	return os.Rename(name, target)
+	if err = os.Rename(name, target); err != nil {
+		return err
+	}
+	if complete != nil {
+		return complete()
+	}
+	return nil
 }
 
 func (o *EventOutbox) run() {

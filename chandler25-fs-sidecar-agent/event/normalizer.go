@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -90,18 +91,38 @@ type SupervisionEventParams struct {
 	Timestamp  int64  `json:"timestamp"`
 }
 
+// DTMFEventSource identifies the source of a physical Event.DTMF key press.
+// Complete digit collection belongs to Event.CommandResult instead.
+type DTMFEventSource = string
+
+const (
+	// DTMFSourceKeyPress represents one raw DTMF key event.
+	DTMFSourceKeyPress DTMFEventSource = "KEY_PRESS"
+)
+
+// CommandResultStatus is the terminal state of one accepted asynchronous
+// command. Acceptance itself is deliberately not a final status.
+type CommandResultStatus = string
+
+const (
+	// CommandResultSucceeded reports a completed successful command.
+	CommandResultSucceeded CommandResultStatus = "SUCCEEDED"
+	// CommandResultFailed reports a completed command whose application failed.
+	CommandResultFailed CommandResultStatus = "FAILED"
+)
+
 // CommandResultEventParams 标准 Event.CommandResult 参数
 type CommandResultEventParams struct {
-	NodeID        string      `json:"node_id"`
-	CtrlUUID      string      `json:"ctrl_uuid,omitempty"`
-	UUID          string      `json:"uuid"`
-	CommandID     string      `json:"command_id"`
-	CommandMethod string      `json:"command_method"`
-	CommandStatus string      `json:"command_status"` // SUCCEEDED, FAILED
-	Code          int         `json:"code"`
-	Message       string      `json:"message"`
-	Result        interface{} `json:"result,omitempty"`
-	Timestamp     int64       `json:"timestamp"`
+	NodeID        string              `json:"node_id"`
+	CtrlUUID      string              `json:"ctrl_uuid,omitempty"`
+	UUID          string              `json:"uuid"`
+	CommandID     string              `json:"command_id"`
+	CommandMethod string              `json:"command_method"`
+	CommandStatus CommandResultStatus `json:"command_status"` // SUCCEEDED, FAILED
+	Code          int                 `json:"code"`
+	Message       string              `json:"message"`
+	Result        map[string]string   `json:"result,omitempty"`
+	Timestamp     int64               `json:"timestamp"`
 }
 
 // StandardRpcNotification 标准 JSON-RPC 2.0 通知报文
@@ -397,29 +418,43 @@ func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventRes
 	case "CHANNEL_EXECUTE_COMPLETE":
 		app := raw["Application"]
 		cmdID := raw["variable_fcc_cmd_id"]
+		if cmdID == "" {
+			cmdID = raw["variable_fcc_command_id"]
+		}
 		cmdMethod := raw["variable_fcc_cmd_method"]
+		if cmdMethod == "" {
+			cmdMethod = raw["variable_fcc_command_method"]
+		}
 		if cmdID != "" {
 			log.Printf("[Normalizer] CHANNEL_EXECUTE_COMPLETE: app=%s cmdID=%s cmdMethod=%s uuid=%s", app, cmdID, cmdMethod, uuid)
 		}
 
+		response := strings.TrimSpace(raw["Application-Response"])
+		failed := strings.HasPrefix(strings.ToUpper(response), "-ERR") ||
+			strings.HasPrefix(strings.ToUpper(response), "ERROR") ||
+			strings.EqualFold(response, "FILE NOT FOUND")
+
 		if app == "play_and_get_digits" {
 			dtmfVal := raw["variable_dtmf_val"]
 			if dtmfVal == "" {
-				dtmfVal = raw["Application-Response"]
+				dtmfVal = response
 			}
 
 			if cmdID != "" {
-				succeeded := dtmfVal != "" && dtmfVal != "_none_"
-				status := "SUCCEEDED"
+				succeeded := dtmfVal != "" && dtmfVal != "_none_" && !failed
+				status := CommandResultSucceeded
 				code := 200
 				msg := "OK"
-				var resPayload map[string]interface{}
+				resPayload := map[string]string{}
 				if succeeded {
-					resPayload = map[string]interface{}{"dtmf": dtmfVal}
+					resPayload["dtmf"] = dtmfVal
 				} else {
-					status = "FAILED"
+					status = CommandResultFailed
 					code = -32004
 					msg = "NO_DIGITS"
+					if failed {
+						msg = "FreeSWITCH media application failed"
+					}
 				}
 
 				if cmdMethod == "" {
@@ -461,7 +496,7 @@ func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventRes
 					UUID:       uuid,
 					Digit:      dtmfVal,
 					DurationMs: 100,
-					Source:     "KEY_PRESS",
+					Source:     DTMFSourceKeyPress,
 					Timestamp:  nowMs,
 				}
 				notif := StandardRpcNotification{
@@ -483,16 +518,24 @@ func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventRes
 
 		if app == "playback" {
 			if cmdID != "" && (cmdMethod == "FNode.Play" || cmdMethod == "") {
+				status := CommandResultSucceeded
+				code := 200
+				msg := "OK"
+				if failed {
+					status = CommandResultFailed
+					code = -32004
+					msg = "FreeSWITCH media application failed"
+				}
 				cmdParams := CommandResultEventParams{
 					NodeID:        n.nodeID,
 					CtrlUUID:      ctrlUUID,
 					UUID:          uuid,
 					CommandID:     cmdID,
 					CommandMethod: "FNode.Play",
-					CommandStatus: "SUCCEEDED",
-					Code:          200,
-					Message:       "OK",
-					Result:        map[string]interface{}{},
+					CommandStatus: status,
+					Code:          code,
+					Message:       msg,
+					Result:        map[string]string{},
 					Timestamp:     nowMs,
 				}
 				notif := StandardRpcNotification{
@@ -503,7 +546,7 @@ func (n *Normalizer) normalizePayload(raw map[string]string) *NormalizedEventRes
 				data, _ := json.Marshal(notif)
 				return &NormalizedEventResult{
 					Category:       "command",
-					State:          "SUCCEEDED",
+					State:          status,
 					UUID:           uuid,
 					CtrlUUID:       ctrlUUID,
 					RawJSON:        data,
@@ -619,6 +662,18 @@ func (n *Normalizer) buildChannelParams(raw map[string]string, uuid, ctrlUUID, s
 		flowEntry = raw["fcc_flow_entry"]
 	}
 
+	parameters := map[string]string{
+		"authenticated_extension": authExt,
+		"sip_user_agent":          raw["variable_sip_user_agent"],
+		"codec":                   raw["variable_read_codec"],
+	}
+	if dtmfVal != "" {
+		parameters["dtmf_val"] = dtmfVal
+	}
+	if flowEntry != "" {
+		parameters["flow_entry"] = flowEntry
+	}
+
 	return ChannelEventParams{
 		NodeID:      n.nodeID,
 		CtrlUUID:    ctrlUUID,
@@ -635,13 +690,7 @@ func (n *Normalizer) buildChannelParams(raw map[string]string, uuid, ctrlUUID, s
 		AnswerEpoch: answerEpoch,
 		EndEpoch:    endEpoch,
 		Timestamp:   nowMs,
-		Params: map[string]string{
-			"authenticated_extension": authExt,
-			"flow_entry":              flowEntry,
-			"sip_user_agent":          raw["variable_sip_user_agent"],
-			"codec":                   raw["variable_read_codec"],
-			"dtmf_val":                dtmfVal,
-		},
+		Params:      parameters,
 	}
 }
 
