@@ -327,10 +327,7 @@ const varsForm = ref({
  */
 function normalizeFsVarRef(val: string): string {
   if (!val) return val
-  return val
-    .replace(/\$\$\{([^}]+)\}/g, '___DLR_DLR_$1___')
-    .replace(/\$\{([^}]+)\}/g, '$$\${$1}')
-    .replace(/___DLR_DLR_([^}]+)___/g, '$$\${$1}')
+  return val.replace(/(^|[^\$])\$\{([^}]+)\}/g, (_m, p1, p2) => `${p1}$$\{${p2}}`)
 }
 
 function hasSingleDollarVar(val: string): boolean {

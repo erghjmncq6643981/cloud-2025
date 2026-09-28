@@ -1477,7 +1477,7 @@ func sanitizeFsVar(val string) string {
 		return val
 	}
 	for reSingleDollarVar.MatchString(val) {
-		val = reSingleDollarVar.ReplaceAllString(val, `${1}$${${2}}`)
+		val = reSingleDollarVar.ReplaceAllString(val, `${1}$$$${${2}}`)
 	}
 	return val
 }
