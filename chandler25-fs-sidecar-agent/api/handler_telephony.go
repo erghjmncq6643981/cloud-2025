@@ -1413,15 +1413,30 @@ func (h *TelephonyHandler) HandleVars(w http.ResponseWriter, r *http.Request) {
 		// 检查 local_ip_v4 是否变更
 		oldIp := extractXmlVar(content, "local_ip_v4")
 
-		// 逐项更新变量
+		hasChanges := false
+		// 逐项更新变量（没有变化的值不更新）
 		for k, v := range req.Vars {
 			if strings.TrimSpace(k) == "" {
 				continue
 			}
-			content = setOrReplaceXmlVar(content, k, v)
+			newContent, changed := setOrReplaceXmlVar(content, k, v)
+			if changed {
+				content = newContent
+				hasChanges = true
+			}
 		}
 
-		// 写回文件
+		if !hasChanges {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":            200,
+				"message":         "配置无变更，保持原有设置",
+				"sofia_restarted": false,
+				"file_path":       varsPath,
+			})
+			return
+		}
+
+		// 有变更时写回文件
 		if err := os.WriteFile(varsPath, []byte(content), 0644); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1482,18 +1497,24 @@ func sanitizeFsVar(val string) string {
 	return val
 }
 
-// 辅助函数：替换或新增 XML 变量
-func setOrReplaceXmlVar(content, key, value string) string {
-	value = sanitizeFsVar(value)
+// 辅助函数：仅在值有实际变化时替换或新增 XML 变量，没有变化则返回 false
+func setOrReplaceXmlVar(content, key, value string) (string, bool) {
+	sanitizedValue := sanitizeFsVar(value)
+	currentVal := extractXmlVar(content, key)
+	if currentVal == sanitizedValue || currentVal == value {
+		// 没有变化的值，不更新
+		return content, false
+	}
+
 	pattern := fmt.Sprintf(`(?m)^[ \t]*<X-PRE-PROCESS\s+cmd="set"\s+data="%s=[^"]*"\s*/>`, regexp.QuoteMeta(key))
 	re := regexp.MustCompile(pattern)
-	replacement := fmt.Sprintf(`  <X-PRE-PROCESS cmd="set" data="%s=%s"/>`, key, value)
+	replacement := fmt.Sprintf(`  <X-PRE-PROCESS cmd="set" data="%s=%s"/>`, key, sanitizedValue)
 	if re.MatchString(content) {
-		return re.ReplaceAllString(content, replacement)
+		return re.ReplaceAllString(content, replacement), true
 	}
 	// 如果不存在，尝试在 <include> 后插入
 	if strings.Contains(content, "<include>") {
-		return strings.Replace(content, "<include>", "<include>\n"+replacement, 1)
+		return strings.Replace(content, "<include>", "<include>\n"+replacement, 1), true
 	}
-	return content + "\n" + replacement
+	return content + "\n" + replacement, true
 }

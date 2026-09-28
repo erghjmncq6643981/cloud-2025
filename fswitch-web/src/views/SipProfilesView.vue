@@ -150,10 +150,7 @@
               @blur="varsForm.domain = normalizeFsVarRef(varsForm.domain)"
               class="w-full bg-slate-950 border border-slate-700 text-white font-mono text-base rounded-xl px-4 py-2.5 outline-none focus:border-cyan-500"
             />
-            <div v-if="hasSingleDollarVar(varsForm.domain)" class="text-xs text-amber-400 flex items-center gap-1 font-medium">
-              <span>⚠️ 检测到单美元符号 ${...}，失焦或提交时将自动纠正为合法的全局宏 $${...}</span>
-            </div>
-            <p class="text-xs text-slate-400">支持直接使用变量引用 <code>$${local_ip_v4}</code>，或自定义固定 IP / 域名。</p>
+            <p class="text-xs text-slate-400">支持直接使用变量引用 <code>$${local_ip_v4}</code> 或 <code>${local_ip_v4}</code>，未修改的值将原样保留。</p>
           </div>
 
           <!-- 3. default_password -->
@@ -193,10 +190,7 @@
               @blur="varsForm.external_sip_ip = normalizeFsVarRef(varsForm.external_sip_ip)"
               class="w-full bg-slate-950 border border-slate-700 text-slate-200 font-mono text-base rounded-xl px-4 py-2.5 outline-none focus:border-cyan-500"
             />
-            <div v-if="hasSingleDollarVar(varsForm.external_sip_ip)" class="text-xs text-amber-400 flex items-center gap-1 font-medium">
-              <span>⚠️ 检测到单美元符号 ${...}，失焦或提交时将自动纠正为合法的全局宏 $${...}</span>
-            </div>
-            <p class="text-xs text-slate-400">局域网/开发环境通常为 <code>$${local_ip_v4}</code>，公网生产请填写公网弹性 IP。</p>
+            <p class="text-xs text-slate-400">局域网/开发环境通常为 <code>$${local_ip_v4}</code> 或 <code>${local_ip_v4}</code>，公网生产请填写公网弹性 IP。</p>
           </div>
 
           <!-- 5. external_rtp_ip -->
@@ -212,10 +206,7 @@
               @blur="varsForm.external_rtp_ip = normalizeFsVarRef(varsForm.external_rtp_ip)"
               class="w-full bg-slate-950 border border-slate-700 text-slate-200 font-mono text-base rounded-xl px-4 py-2.5 outline-none focus:border-cyan-500"
             />
-            <div v-if="hasSingleDollarVar(varsForm.external_rtp_ip)" class="text-xs text-amber-400 flex items-center gap-1 font-medium">
-              <span>⚠️ 检测到单美元符号 ${...}，失焦或提交时将自动纠正为合法的全局宏 $${...}</span>
-            </div>
-            <p class="text-xs text-slate-400">音频 RTP 媒体流直通地址，填错将导致通话出现单通或无声。</p>
+            <p class="text-xs text-slate-400">音频 RTP 媒体流直通地址，支持 <code>$${local_ip_v4}</code> 或 <code>${local_ip_v4}</code>。</p>
           </div>
 
           <!-- 6. sound_prefix -->
@@ -231,9 +222,6 @@
               @blur="varsForm.sound_prefix = normalizeFsVarRef(varsForm.sound_prefix)"
               class="w-full bg-slate-950 border border-slate-700 text-slate-200 font-mono text-base rounded-xl px-4 py-2.5 outline-none focus:border-cyan-500"
             />
-            <div v-if="hasSingleDollarVar(varsForm.sound_prefix)" class="text-xs text-amber-400 flex items-center gap-1 font-medium">
-              <span>⚠️ 检测到单美元符号 ${...}，失焦或提交时将自动纠正为合法的全局宏 $${...}</span>
-            </div>
             <p class="text-xs text-slate-400">FreeSWITCH 播放系统提示音时优先搜寻该目录下的 wav 资源。</p>
           </div>
 
@@ -250,9 +238,6 @@
               @blur="varsForm.hold_music = normalizeFsVarRef(varsForm.hold_music)"
               class="w-full bg-slate-950 border border-slate-700 text-slate-200 font-mono text-base rounded-xl px-4 py-2.5 outline-none focus:border-cyan-500"
             />
-            <div v-if="hasSingleDollarVar(varsForm.hold_music)" class="text-xs text-amber-400 flex items-center gap-1 font-medium">
-              <span>⚠️ 检测到单美元符号 ${...}，失焦或提交时将自动纠正为合法的全局宏 $${...}</span>
-            </div>
             <p class="text-xs text-slate-400">通常为 <code>local_stream://moh</code> 对应 MOH 循环音频流。</p>
           </div>
         </div>
@@ -319,20 +304,15 @@ const varsForm = ref({
   hold_music: '',
   rtp_sdes_suites: ''
 })
+const originalVars = ref<Record<string, string>>({})
 
 /**
- * 校验并自动纠正 FreeSWITCH 预处理宏变量格式：
- * 将单美元符号 ${var} 纠正为合法的双美元符号 $${var}。
- * FreeSWITCH 的 vars.xml 变量引用必须使用 $${...}，单 ${...} 会被作为普通字符串而导致解析或寻址失败。
+ * 支持用户输入 ${var} 或 $${var}，自动规范化为 FreeSWITCH 预处理全局宏 $${var}。
+ * 兼容未变化字段直接原样保留，避免不必要的格式扰动。
  */
 function normalizeFsVarRef(val: string): string {
   if (!val) return val
   return val.replace(/(^|[^\$])\$\{([^}]+)\}/g, (_m, p1, p2) => `${p1}$$\{${p2}}`)
-}
-
-function hasSingleDollarVar(val: string): boolean {
-  if (!val) return false
-  return /(^|[^\$])\$\{([^}]+)\}/.test(val)
 }
 
 onMounted(async () => {
@@ -354,6 +334,7 @@ async function loadVars() {
         hold_music: data.vars.hold_music || '',
         rtp_sdes_suites: data.vars.rtp_sdes_suites || ''
       }
+      originalVars.value = { ...varsForm.value }
     }
   } catch (err: any) {
     emit('toast', `加载 vars.xml 失败: ${err.message || '网络异常'}`)
@@ -367,14 +348,25 @@ async function saveVars() {
   }
   isSaving.value = true
   try {
-    // 提交前全面清洗并纠正 ${...} -> $${...}
-    const sanitizedVars: Record<string, string> = {}
+    // 仅收集发生实际变动的字段；未变动的值不提交更新
+    const changedVars: Record<string, string> = {}
     for (const [k, v] of Object.entries(varsForm.value)) {
-      sanitizedVars[k] = normalizeFsVarRef(v)
-      // 同步回填表单
-      ;(varsForm.value as any)[k] = sanitizedVars[k]
+      const orig = originalVars.value[k] || ''
+      const normalized = normalizeFsVarRef(v)
+      // 回填标准化值
+      ;(varsForm.value as any)[k] = normalized
+      if (normalized !== orig && v !== orig) {
+        changedVars[k] = normalized
+      }
     }
-    const res = await telephonyApi.updateVars(sanitizedVars)
+
+    if (Object.keys(changedVars).length === 0) {
+      emit('toast', '配置无任何变更，无需保存')
+      isSaving.value = false
+      return
+    }
+
+    const res = await telephonyApi.updateVars(changedVars)
     emit('toast', res.message || 'vars.xml 配置已保存并热重载！')
     await loadVars()
   } catch (err: any) {
