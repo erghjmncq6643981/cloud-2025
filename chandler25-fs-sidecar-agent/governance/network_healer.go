@@ -181,6 +181,45 @@ func isValidLANIP(ipStr string) bool {
 	return true
 }
 
+// IsHostActiveIP 检查指定 IP 是否属于本机当前任一处于启用状态的物理/逻辑网卡有效 IPv4
+func IsHostActiveIP(ipStr string) bool {
+	target := net.ParseIP(strings.TrimSpace(ipStr))
+	if target == nil {
+		return false
+	}
+	target4 := target.To4()
+	if target4 == nil || target4.IsLoopback() {
+		return false
+	}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil && ip.To4() != nil && ip.Equal(target4) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ReconcileAndHeal 检查并自动执行网络自愈。
 // 返回: healed (是否执行了自愈动作), err (是否有严重错误)
 func (h *NetworkHealer) ReconcileAndHeal() (bool, error) {
@@ -212,7 +251,14 @@ func (h *NetworkHealer) ReconcileAndHeal() (bool, error) {
 	profileBroken := strings.Contains(strings.ToLower(sofiaRaw), "invalid profile") ||
 		strings.HasPrefix(strings.TrimSpace(sofiaRaw), "-ERR")
 
-	needsHealing := (currentFSIP != "" && currentFSIP != hostIP) || profileBroken
+	// 检查当前 FreeSWITCH 配置的 IP 是否依然是本机现存的活跃 IP
+	fsIPIsActive := IsHostActiveIP(currentFSIP)
+
+	// 触发自愈的准则：
+	// 1. Sofia profile internal 处于故障态 (profileBroken)，无法正常提供服务；
+	// 2. 或者 FreeSWITCH 绑定的 IP 在本机所有活跃网卡中已完全不存在（如断开 Wi-Fi 导致 IP 失效）。
+	// 如果当前绑定的 IP 本身就是本机某个活跃网卡且 Sofia 运行正常，则属于用户主动配置的网络绑定，严禁被自愈器盲目覆盖！
+	needsHealing := profileBroken || (currentFSIP != "" && !fsIPIsActive)
 	if !needsHealing {
 		return false, nil
 	}

@@ -89,6 +89,42 @@ func TestNetworkHealerNoOpWhenHealthy(t *testing.T) {
 	}
 }
 
+func TestNetworkHealerRespectsAlternativeActiveHostIP(t *testing.T) {
+	// 找到任一本机活跃有效 IP
+	ifaces, err := os.Hostname()
+	_ = ifaces
+	var activeIP string
+	for _, ip := range []string{"192.168.18.64", "192.168.12.78"} {
+		if IsHostActiveIP(ip) {
+			activeIP = ip
+			break
+		}
+	}
+	if activeIP == "" {
+		t.Skip("No secondary active IP found on host, skipping")
+	}
+
+	mock := &mockESLClient{
+		vars: map[string]string{
+			"conf_dir":    "/tmp",
+			"local_ip_v4": activeIP,
+		},
+		profiles: map[string]string{
+			"internal": "State: RUNNING (0)",
+		},
+	}
+
+	healer := NewNetworkHealer(mock)
+	healed, err := healer.ReconcileAndHeal()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if healed {
+		t.Fatalf("expected no-op when alternative active IP is healthy and running")
+	}
+}
+
+
 func TestNetworkHealerTriggerHealing(t *testing.T) {
 	currentIP, err := DetectHostLANIP()
 	if err != nil {
